@@ -1,13 +1,12 @@
 """
-The interactive dashboard, launched by typing `kk` at the shell.
+The interactive dashboard, launched by typing `kk` at the shell (see
+scripts/install_kk.sh for how that alias gets wired up).
 """
 from __future__ import annotations
 
-import subprocess
-from core.config import APP_ROOT, state
+from core.config import state
 from core.exceptions import SSHAutoError
 from core.logger import log
-from core.shell import Shell
 from dashboard import ui
 from dashboard.monitor import Monitor
 from dashboard.ports import PortManager
@@ -38,9 +37,6 @@ class Dashboard:
             ui.kv_row("Active tunnels", str(stats.active_connections))
             ui.kv_row("Total accounts", str(stats.total_users))
             ui.kv_row("Throughput", f"↓ {stats.rx_kbps} kbps   ↑ {stats.tx_kbps} kbps")
-        # Show current Git commit (build version)
-        commit = self._current_commit()
-        print(f"  \033[2mVersion\033[0m  {commit}")
         print()
         ui.menu([
             ("1", "Create SSH/websocket user"),
@@ -52,7 +48,6 @@ class Dashboard:
             ("7", "Remove custom port"),
             ("8", "Show active ports"),
             ("9", "Server status (services)"),
-            ("10", "Check for updates (git pull & reinstall)"),
             ("0", "Exit"),
         ])
 
@@ -67,7 +62,6 @@ class Dashboard:
             "7": lambda: self._remove_port(),
             "8": self._show_ports,
             "9": self._service_status,
-            "10": self._manual_update,
         }
         action = actions.get(choice)
         if not action:
@@ -155,38 +149,11 @@ class Dashboard:
         from core.plugin_manager import PluginManager
         PluginManager().status_all()
 
-    def _manual_update(self) -> None:
-        ui.clear()
-        ui.header("Manual Update")
-        print("Checking for new commits and applying them...\n")
-        result = subprocess.run(
-            ["python3", str(APP_ROOT / "scripts/autoupdate_check.py")],
-            capture_output=True,
-            text=True,
-        )
-        if result.stdout:
-            print(result.stdout)
-        if result.stderr:
-            print("\033[31m" + result.stderr + "\033[0m")
-        if result.returncode == 0:
-            print("\n\033[32m✓ Update completed successfully.\033[0m")
-        else:
-            print("\n\033[31m✗ Update failed. See logs above.\033[0m")
-        ui.pause()
-
     def _safe_live_stats(self):
         try:
             return self.monitor.live_stats(sample_seconds=0.3)
         except Exception:  # noqa: BLE001 - the home screen must never crash
             return None
-
-    def _current_commit(self) -> str:
-        """Return short commit hash, or 'unknown' if not a git repo."""
-        git_dir = APP_ROOT / ".git"
-        if not git_dir.exists():
-            return "unknown"
-        result = Shell.run("git rev-parse --short HEAD", check=False)
-        return result.stdout.strip() or "unknown"
 
 
 def main():

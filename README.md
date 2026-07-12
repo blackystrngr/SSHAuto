@@ -86,7 +86,7 @@ data/banners.txt            pool of random SSH banners
 ## Install (on the target VPS, as root)
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/blackystrngr/sshauto/main/install.sh)
+curl -fsSL https://raw.githubusercontent.com/<you>/sshauto/main/install.sh | sudo bash
 ```
 
 or, if you've already cloned it:
