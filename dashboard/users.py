@@ -42,7 +42,10 @@ class UserManager:
             raise ValidationError(f"user '{username}' already exists")
 
         shell = self._tunnel_shell()
-        Shell.run(f"useradd -m -s {shell} -g {USER_GROUP} {username}")
+        
+        # Changed -g to -G to assign as a supplementary group, ensuring
+        # standard visibility in /etc/group files.
+        Shell.run(f"useradd -m -s {shell} -G {USER_GROUP} {username}")
         Shell.run(f"chpasswd", input_text=f"{username}:{password}\n")
 
         if expire_days:
@@ -59,12 +62,32 @@ class UserManager:
         log.success(f"deleted user '{username}'")
 
     def list(self) -> list[SSHUser]:
-        result = Shell.run(f"getent group {USER_GROUP}", check=False)
-        if not result.ok or ":" not in result.stdout:
+        """
+        Scans both primary and supplementary user assignments to ensure
+        all tunnel accounts show up reliably in the dashboard.
+        """
+        group_res = Shell.run(f"getent group {USER_GROUP}", check=False)
+        if not group_res.ok or ":" not in group_res.stdout:
             return []
-        members = result.stdout.strip().split(":")[-1]
-        usernames = [u for u in members.split(",") if u]
-        return [SSHUser(u, self._expiry_of(u), locked=self._is_locked(u)) for u in usernames]
+
+        parts = group_res.stdout.strip().split(":")
+        if len(parts) < 3:
+            return []
+
+        gid = parts[2]
+        # Capture supplementary members (comma-separated list at the end)
+        supp_members = parts[3].split(",") if len(parts) > 3 else []
+        usernames = set(u for u in supp_members if u)
+
+        # Capture primary members whose default GID matches the target group
+        passwd_res = Shell.run("getent passwd", check=False)
+        if passwd_res.ok:
+            for line in passwd_res.stdout.splitlines():
+                p_parts = line.split(":")
+                if len(p_parts) > 3 and p_parts[3] == gid:
+                    usernames.add(p_parts[0])
+
+        return [SSHUser(u, self._expiry_of(u), locked=self._is_locked(u)) for u in sorted(usernames)]
 
     def _tunnel_shell(self) -> str:
         for candidate in ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false"):
