@@ -38,7 +38,7 @@ class Dashboard:
             ui.kv_row("Active tunnels", str(stats.active_connections))
             ui.kv_row("Total accounts", str(stats.total_users))
             ui.kv_row("Throughput", f"↓ {stats.rx_kbps} kbps   ↑ {stats.tx_kbps} kbps")
-        # Show current git commit
+        # Show current Git commit (build version)
         commit = self._current_commit()
         print(f"  \033[2mVersion\033[0m  {commit}")
         print()
