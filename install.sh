@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # sshauto bootstrap installer.
+
 # Usage on a fresh Debian/Ubuntu VPS:
 #   curl -fsSL https://raw.githubusercontent.com/<you>/sshauto/main/install.sh | sudo bash
 set -euo pipefail
