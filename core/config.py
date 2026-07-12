@@ -1,8 +1,6 @@
 """
 Single source of truth for every constant used across the project, plus
-a tiny JSON-backed StateStore so features/dashboard can persist things
-(current dropbear port, custom ports, chosen cert strategy, domain...)
-without a database.
+a tiny JSON-backed StateStore so features/dashboard can persist things.
 """
 from __future__ import annotations
 
@@ -12,19 +10,21 @@ import threading
 from pathlib import Path
 
 # ----------------------------------------------------------------------
-# Network layout
+# Network layout aligned with Nginx WebSocket Architecture
 # ----------------------------------------------------------------------
-HTTP_PORTS = {80, 8080, 8880, 2052, 2082, 2086, 2095}
-HTTPS_PORTS = {443, 8443, 2053, 2083, 2087, 2096}
+HTTP_PORTS = {80, 8080, 8880}
+HTTPS_PORTS = {8443, 2096}
 
-SSH_PORT_DEFAULT = 22                 # real OpenSSH, direct access
-DROPBEAR_PORT_DEFAULT = 143           # dropbear, bound to 127.0.0.1 only,
-                                       # reached exclusively through the
-                                       # nginx websocket relay above.
+SSH_PORT_DEFAULT = 22                 # Real OpenSSH, direct access
+DROPBEAR_PORT_DEFAULT = 110           # Dropbear backend isolated on localhost
 
 # ----------------------------------------------------------------------
-# Filesystem paths (all as specified / conventional Debian-family paths)
+# Filesystem paths
 # ----------------------------------------------------------------------
+APP_ROOT = Path("/opt/sshauto")
+STATE_FILE = APP_ROOT / "data" / "state.json"
+LOG_DIR = Path("/var/log/sshauto")
+
 NGINX_SITES_AVAILABLE = Path("/etc/nginx/sites-available")
 NGINX_SITES_ENABLED = Path("/etc/nginx/sites-enabled")
 NGINX_RELAY_NAME = "sshauto-relay"
@@ -33,77 +33,24 @@ SSHD_CONFIG = Path("/etc/ssh/sshd_config")
 SSH_BANNER_PATH = Path("/etc/ssh/sshauto_banner")
 
 DROPBEAR_DEFAULTS_FILE = Path("/etc/default/dropbear")
-DROPBEAR_BANNER_PATH = Path("/etc/dropbear/sshauto_banner")
+DROPBEAR_BANNER_PATH = Path("/etc/ssh/dropbear_banner")
 
-FAIL2BAN_JAIL_LOCAL = Path("/etc/fail2ban/jail.local")
 FAIL2BAN_FILTER_DIR = Path("/etc/fail2ban/filter.d")
-
-LETSENCRYPT_LIVE = Path("/etc/letsencrypt/live")
-SSHAUTO_CERT_DIR = Path("/etc/sshauto/certs")
-
-APP_ROOT = Path(os.environ.get("SSHAUTO_HOME", "/opt/sshauto"))
-STATE_DIR = Path("/etc/sshauto")
-STATE_FILE = STATE_DIR / "state.json"
-LOG_DIR = Path("/var/log/sshauto")
+FAIL2BAN_JAIL_LOCAL = Path("/etc/fail2ban/jail.local")
 
 SYSTEMD_DIR = Path("/etc/systemd/system")
+LETSENCRYPT_LIVE = Path("/etc/letsencrypt/live")
+SSHAUTO_CERT_DIR = APP_ROOT / "certs"
 
-# ----------------------------------------------------------------------
-# Packages
-# ----------------------------------------------------------------------
-REQUIRED_PACKAGES = [
-    "iptables",              # firewall (also provides ip6tables)
-    "openssh-server",        # real ssh daemon
-    "dropbear",              # lightweight ssh, relayed over websocket
-    "nginx",                 # relay / reverse proxy
-    "certbot",                # ACME client
-    "python3",
-    "python3-pip",
-    "python3-venv",
-    "curl",
-    "wget",
-    "git",                   # required by the auto-updater
-    "fail2ban",               # brute-force protection
-    "socat",                  # used by certbot standalone / acme flows
-    "jq",                      # JSON parsing in shell helpers
-    "net-tools",               # netstat, used as ss fallback
-    "cron",
-    "unzip",
-    "openssl",
-    "uuid-runtime",
-    "dnsutils",               # dig, used for domain validation before ACME
-]
-
-REMOVE_PACKAGES = [
-    "apache2",
-    "apache2-bin",
-    "apache2-utils",
-    "apache2-data",
-    "ufw",
-    "firewalld",              # conflicts with our raw iptables rules
-]
-
-PIP_PACKAGES = [
-    "requests>=2.31",
-]
-
-# ----------------------------------------------------------------------
-# Misc
-# ----------------------------------------------------------------------
 GIT_POLL_INTERVAL_SECONDS = 30
-USER_GROUP = "sshauto-users"   # marker group for accounts created by us
+USER_GROUP = "sshauto_tunnels"
 
 
 class StateStore:
-    """
-    Tiny JSON key/value store at /etc/sshauto/state.json.
-    Thread-safe, atomic writes (write-tmp + rename).
-    """
-
-    _lock = threading.Lock()
-
+    """Thread-safe JSON file store for persistent operations status."""
     def __init__(self, path: Path = STATE_FILE):
         self.path = path
+        self._lock = threading.Lock()
 
     def _read(self) -> dict:
         if not self.path.exists():
