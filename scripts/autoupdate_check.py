@@ -3,16 +3,10 @@
 Runs every 30 seconds via systemd timer (sshauto-autoupdate.timer).
 
 Logic:
-  1. git fetch quietly
-  2. compare local HEAD vs origin/<branch> HEAD
-  3. if different: git pull, then re-run `main.py install` (idempotent —
-     every feature's install() is safe to call again) so any changed
-     package list / template / config takes effect immediately, and
-     finally restart the services that matter.
-
-Kept dependency-free and import-light on purpose: this runs unattended,
-so we want the smallest possible blast radius if something about the
-package layout ever changes.
+  1. Check if /opt/sshauto/.git exists; if not, skip quietly.
+  2. git fetch quietly
+  3. compare local HEAD vs origin/<branch> HEAD
+  4. if different: git pull, then re-run `main.py install --skip-non-idempotent --quiet`
 """
 from __future__ import annotations
 
@@ -32,8 +26,9 @@ def current_branch() -> str:
 
 
 def main() -> int:
+    # If not a Git repo, just exit cleanly
     if not (APP_ROOT / ".git").exists():
-        log.debug("not a git checkout, auto-update has nothing to do")
+        print("Not a Git repository – auto-update skipped.")
         return 0
 
     branch = current_branch()
@@ -54,8 +49,7 @@ def main() -> int:
         log.error(f"auto-update: git pull failed, staying on {local[:7]}: {pull.stderr.strip()}")
         return 1
 
-    # Re-apply every feature (idempotent ones only — certificates are
-    # intentionally excluded so a commit never silently re-issues certs).
+    # Re-apply every feature (idempotent ones only — certificates are excluded)
     install = Shell.run(
         f"{sys.executable} {APP_ROOT}/main.py install --skip-non-idempotent --quiet",
         check=False,
