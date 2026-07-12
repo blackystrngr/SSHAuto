@@ -1,8 +1,6 @@
 """
-Lets the operator add ports beyond the built-in HTTP_PORTS/HTTPS_PORTS
-sets (e.g. a CDN provider that uses a different port range). Any change
-here touches three things in lockstep: state.json, the nginx relay
-config, and the firewall — handled together so they never drift apart.
+Manages runtime port lists via state storage and hooks updates directly
+into the newly restructured Nginx relay and Firewall components.
 """
 from __future__ import annotations
 
@@ -17,25 +15,29 @@ class PortManager:
         data = state.ensure_defaults()
         key = "custom_http_ports" if kind == "http" else "custom_https_ports"
         ports = set(data.get(key, []))
+        
         if port in ports or port in (HTTP_PORTS if kind == "http" else HTTPS_PORTS):
-            raise ValidationError(f"port {port} is already active")
+            raise ValidationError(f"Port {port} is already actively assigned.")
+            
         ports.add(port)
         data[key] = sorted(ports)
         state.save(data)
         self._apply()
-        log.success(f"added custom {kind.upper()} port {port}")
+        log.success(f"Successfully appended custom {kind.upper()} listener on port {port}")
 
     def remove(self, port: int, kind: str) -> None:
         data = state.ensure_defaults()
         key = "custom_http_ports" if kind == "http" else "custom_https_ports"
         ports = set(data.get(key, []))
+        
         if port not in ports:
-            raise ValidationError(f"{port} is not a custom port (built-in ports can't be removed)")
+            raise ValidationError(f"{port} is not a custom active port.")
+            
         ports.discard(port)
         data[key] = sorted(ports)
         state.save(data)
         self._apply()
-        log.success(f"removed custom {kind.upper()} port {port}")
+        log.success(f"Removed custom {kind.upper()} listener from port {port}")
 
     def list_all(self) -> dict:
         data = state.ensure_defaults()
@@ -46,14 +48,18 @@ class PortManager:
 
     def _validate(self, port: int, kind: str):
         if kind not in ("http", "https"):
-            raise ValidationError("kind must be 'http' or 'https'")
+            raise ValidationError("Port connection type classification must be 'http' or 'https'")
         if not (1 <= port <= 65535):
-            raise ValidationError("port must be between 1 and 65535")
+            raise ValidationError("System target network port boundary must fall between 1 and 65535")
 
     def _apply(self):
-        # Re-render nginx and re-apply the firewall so the new port is both
-        # relayed and actually reachable through iptables.
-        from features.firewall import FirewallFeature
-        from features.nginx_relay import NginxRelayFeature
-        NginxRelayFeature().regenerate()
-        FirewallFeature().install()
+        """Forces immediate runtime propagation across Nginx routes and Firewall rules."""
+        try:
+            from features.nginx_relay import NginxRelayFeature
+            from features.firewall import FirewallFeature
+            
+            log.info("Re-applying updated port matrices into system configurations...")
+            NginxRelayFeature().install()
+            FirewallFeature().install()
+        except Exception as exc:
+            log.error(f"Failed to synchronize live services with updated ports: {exc}")
