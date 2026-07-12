@@ -1,115 +1,166 @@
 """
-Builds /etc/nginx/sites-available/sshauto-relay.conf from the two
-templates and symlinks it into sites-enabled. Regenerated any time ports
-change (dashboard add/remove-port) or the cert changes.
+Orchestrates the custom multi-port Nginx proxy server block and installs
+the companion asynchronous TCP WebSocket socket bridge.
 """
 from __future__ import annotations
 
 from pathlib import Path
-
-from core.config import (
-    APP_ROOT,
-    DROPBEAR_PORT_DEFAULT,
-    HTTP_PORTS,
-    HTTPS_PORTS,
-    NGINX_RELAY_NAME,
-    NGINX_SITES_AVAILABLE,
-    NGINX_SITES_ENABLED,
-    state,
-)
-from core.exceptions import ConfigError
+from core.config import NGINX_SITES_AVAILABLE, NGINX_SITES_ENABLED, state
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
 
-TEMPLATES_DIR = APP_ROOT / "templates"
+WS_PROXY_PORT = 8000
 
 
 class NginxRelayFeature(BaseFeature):
     name = "nginx_relay"
-    description = "Generate the nginx websocket relay (HTTP+HTTPS -> dropbear)"
+    description = "Generate multi-port Nginx listener blocks & WebSocket routing loop"
     depends_on = ["packages", "dropbear_service"]
 
     @property
     def available_path(self) -> Path:
-        return NGINX_SITES_AVAILABLE / f"{NGINX_RELAY_NAME}.conf"
+        return NGINX_SITES_AVAILABLE / "sshauto-relay.conf"
 
     @property
     def enabled_path(self) -> Path:
-        return NGINX_SITES_ENABLED / f"{NGINX_RELAY_NAME}.conf"
+        return NGINX_SITES_ENABLED / "sshauto-relay.conf"
 
     def is_installed(self) -> bool:
-        return self.enabled_path.exists() or self.enabled_path.is_symlink()
+        return self.enabled_path.exists() and os.path.exists("/etc/systemd/system/sshauto-bridge.service")
 
     def install(self) -> None:
         NGINX_SITES_AVAILABLE.mkdir(parents=True, exist_ok=True)
         NGINX_SITES_ENABLED.mkdir(parents=True, exist_ok=True)
 
         self._disable_default_site()
-        config_text = self._render()
+        self._deploy_python_bridge()
+        
+        config_text = self._render_nginx_config()
         self.available_path.write_text(config_text)
 
         if not self.enabled_path.exists():
             Shell.run(f"ln -sf {self.available_path} {self.enabled_path}")
 
-        Shell.run("nginx -t")  # validate before touching the live service
+        Shell.run("nginx -t")
         Shell.run("systemctl enable nginx", check=False)
-        Shell.run("systemctl reload nginx || systemctl restart nginx")
-        log.success(f"nginx relay written to {self.available_path} and reloaded")
+        Shell.run("systemctl restart nginx")
+        log.success("Nginx structural upgrade configuration reloaded smoothly.")
 
     def remove(self) -> None:
-        Shell.run(f"rm -f {self.enabled_path}", check=False)
+        Shell.run("systemctl stop sshauto-bridge", check=False)
+        Shell.run("systemctl disable sshauto-bridge", check=False)
+        Shell.run(f"rm -f /etc/systemd/system/sshauto-bridge.service /usr/local/bin/sshauto_bridge.py {self.enabled_path}", check=False)
         Shell.run("systemctl reload nginx", check=False)
 
     def regenerate(self):
-        """Called by the dashboard after ports/cert change."""
         self.install()
 
-    # -- rendering ------------------------------------------------------
     def _disable_default_site(self):
         default_link = NGINX_SITES_ENABLED / "default"
         if default_link.exists() or default_link.is_symlink():
             default_link.unlink()
-            log.debug("disabled nginx's default site (would shadow our catch-all)")
 
-    def _render(self) -> str:
+    def _deploy_python_bridge(self):
+        """Compiles the background raw TCP stream handling system."""
+        log.info("Deploying companion Python WebSocket processing loop...")
+        bridge_code = f"""import asyncio
+import websockets
+
+async def handle_client(websocket, path):
+    try:
+        reader, writer = await asyncio.open_connection('127.0.0.1', 110)
+    except Exception:
+        return
+    async def ws_to_tcp():
+        try:
+            async for message in websocket:
+                writer.write(message)
+                await writer.drain()
+        except: pass
+        finally: writer.close()
+    async def tcp_to_ws():
+        try:
+            while True:
+                data = await reader.read(4096)
+                if not data: break
+                await websocket.send(data)
+        except: pass
+        finally: await websocket.close()
+    await asyncio.gather(ws_to_tcp(), tcp_to_ws())
+
+start_server = websockets.serve(handle_client, '127.0.0.1', {WS_PROXY_PORT})
+asyncio.get_event_loop().run_until_complete(start_server)
+asyncio.get_event_loop().run_forever()
+"""
+        with open("/usr/local/bin/sshauto_bridge.py", "w") as f:
+            f.write(bridge_code)
+
+        service_cfg = f"""[Unit]
+Description=SSHAuto WebSocket Core Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /usr/local/bin/sshauto_bridge.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+"""
+        with open("/etc/systemd/system/sshauto-bridge.service", "w") as f:
+            f.write(service_cfg)
+
+        Shell.run("systemctl daemon-reload")
+        Shell.run("systemctl enable sshauto-bridge", check=False)
+        Shell.run("systemctl restart sshauto-bridge")
+
+    def _render_nginx_config(self) -> str:
         data = state.ensure_defaults()
-        dropbear_port = data.get("dropbear_port", DROPBEAR_PORT_DEFAULT)
-        http_ports = sorted(HTTP_PORTS | set(data.get("custom_http_ports", [])))
-        https_ports = sorted(HTTPS_PORTS | set(data.get("custom_https_ports", [])))
-
-        http_listen_block = "\n".join(f"    listen {p};" for p in http_ports)
-
-        https_server_block = ""
-        cert_path, key_path = self._resolve_cert_paths(data)
-        if cert_path and key_path:
-            https_tpl = (TEMPLATES_DIR / "nginx_relay_https.conf.tpl").read_text()
-            https_listen_block = "\n".join(f"    listen {p} ssl;" for p in https_ports)
-            https_server_block = (
-                https_tpl
-                .replace("@HTTPS_LISTEN_BLOCK@", https_listen_block)
-                .replace("@CERT_PATH@", cert_path)
-                .replace("@KEY_PATH@", key_path)
-                .replace("@DROPBEAR_PORT@", str(dropbear_port))
-            )
-        else:
-            log.warning("no certificate configured yet — HTTPS relay ports "
-                        "will not be enabled until `sshauto cert` runs")
-
-        base_tpl_path = TEMPLATES_DIR / "nginx_relay.conf.tpl"
-        if not base_tpl_path.exists():
-            raise ConfigError(f"missing template {base_tpl_path}")
-
-        return (
-            base_tpl_path.read_text()
-            .replace("@HTTP_LISTEN_BLOCK@", http_listen_block)
-            .replace("@DROPBEAR_PORT@", str(dropbear_port))
-            .replace("@HTTPS_SERVER_BLOCK@", https_server_block)
-        )
-
-    def _resolve_cert_paths(self, data: dict) -> tuple[str | None, str | None]:
+        domain = data.get("cert_domain", "localhost")
         cert_path = data.get("cert_fullchain_path")
         key_path = data.get("cert_key_path")
-        if cert_path and key_path and Path(cert_path).exists() and Path(key_path).exists():
-            return cert_path, key_path
-        return None, None
+
+        ssl_block = ""
+        if cert_path and key_path and Path(cert_path).exists():
+            ssl_block = f"""
+server {{
+    listen 8443 ssl;
+    listen 2096 ssl;
+    server_name {domain};
+    ssl_certificate {cert_path};
+    ssl_certificate_key {key_path};
+
+    location / {{
+        proxy_pass http://127.0.0.1:{WS_PROXY_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "Upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering off;
+    }}
+}}"""
+
+        return f"""# Generated by SSHAuto
+server {{
+    listen 80;
+    listen 8080;
+    listen 8880;
+    server_name {domain};
+
+    location / {{
+        proxy_pass http://127.0.0.1:{WS_PROXY_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "Upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_buffering off;
+    }}
+}}
+{ssl_block}
+"""
