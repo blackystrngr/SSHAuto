@@ -40,7 +40,6 @@ class DropbearServiceFeature(BaseFeature):
         config = (
             "# Managed by sshauto - do not edit by hand, edit via the dashboard.\n"
             "NO_START=0\n"
-            f'DROPBEAR_PORT="{port}"\n'
             f'DROPBEAR_EXTRA_ARGS="-p 127.0.0.1:{port} -b {DROPBEAR_BANNER_PATH} -W 65536"\n'
             'DROPBEAR_BANNER="' + str(DROPBEAR_BANNER_PATH) + '"\n'
             "DROPBEAR_RECEIVE_WINDOW=65536\n"
