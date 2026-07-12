@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/<you>/sshauto/main/install.sh | sudo bash
 set -euo pipefail
 
-REPO_URL="${SSHAUTO_REPO_URL:-https://github.com/blackstrngr/sshauto.git}"
+REPO_URL="${SSHAUTO_REPO_URL:-https://github.com/blackystrngr/sshauto.git}"
 BRANCH="${SSHAUTO_BRANCH:-main}"
 APP_ROOT="/opt/sshauto"
 
