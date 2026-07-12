@@ -1,19 +1,31 @@
-#!/usr/bin/env python3
 """
-WebSocket‑to‑TCP proxy with proper WebSocket framing.
-Accepts HTTP upgrade, computes correct Sec-WebSocket-Accept,
-then decodes/encodes WebSocket frames.
+WebSocket-to-TCP proxy – installs the working (raw relay) proxy script.
+"""
+from __future__ import annotations
+
+from core.config import APP_ROOT, DROPBEAR_PORT_DEFAULT, LOG_DIR, SYSTEMD_DIR, state
+from core.logger import log
+from core.shell import Shell
+from features.base import BaseFeature
+
+PROXY_PORT_DEFAULT = 109
+PROXY_SCRIPT_PATH = APP_ROOT / "proxy" / "wsproxy.py"
+PROXY_SERVICE_NAME = "sshauto-proxy.service"
+PROXY_SERVICE_PATH = SYSTEMD_DIR / PROXY_SERVICE_NAME
+
+# ----------------------------------------------------------------------
+# The complete proxy script (raw relay, no WebSocket framing)
+# ----------------------------------------------------------------------
+PROXY_SCRIPT_CONTENT = '''#!/usr/bin/env python3
+"""
+WebSocket-to-TCP proxy – fake upgrade only, no framing.
+Works with HTTP Injector, SSH-over-WS apps, and raw SSH clients.
 """
 import argparse
-import base64
-import hashlib
 import logging
-import socket
 import select
-import struct
-import sys
+import socket
 import threading
-import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -25,82 +37,17 @@ IDLE_TIMEOUT_ROUNDS = 60
 SELECT_TIMEOUT = 3
 INITIAL_READ_TIMEOUT = 20
 HEADER_SETTLE_TIMEOUT = 0.3
-WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
+# Fake upgrade response – keeps nginx and clients happy
+FAKE_UPGRADE_RESPONSE = (
+    b"HTTP/1.1 101 Switching Protocols\\r\\n\\r\\n"
+    b"Content-Length: 104857600000\\r\\n\\r\\n"
+)
+CONNECT_RESPONSE = b"HTTP/1.1 200 Connection Established\\r\\n\\r\\n"
+REJECT_RESPONSE = b"HTTP/1.1 403 Forbidden\\r\\n\\r\\n"
 
-def compute_websocket_accept(key: str) -> str:
-    """Compute the Sec-WebSocket-Accept value."""
-    combined = key.strip() + WEBSOCKET_GUID
-    sha1 = hashlib.sha1(combined.encode()).digest()
-    return base64.b64encode(sha1).decode()
-
-
-def parse_headers(raw: bytes) -> dict:
-    """Parse HTTP headers into a dict."""
-    headers = {}
-    lines = raw.split(b"\r\n")
-    for line in lines[1:]:
-        if b":" not in line:
-            continue
-        key, val = line.split(b":", 1)
-        headers[key.lower().decode().strip()] = val.decode().strip()
-    return headers
-
-
-def decode_websocket_frame(data: bytes):
-    """
-    Decode a WebSocket frame.
-    Returns (opcode, payload, remaining_data, is_final).
-    """
-    if len(data) < 2:
-        return None, None, data, False
-    byte1, byte2 = data[0], data[1]
-    fin = (byte1 & 0x80) != 0
-    opcode = byte1 & 0x0F
-    masked = (byte2 & 0x80) != 0
-    payload_len = byte2 & 0x7F
-    idx = 2
-    if payload_len == 126:
-        if len(data) < 4:
-            return None, None, data, False
-        payload_len = struct.unpack('>H', data[idx:idx+2])[0]
-        idx += 2
-    elif payload_len == 127:
-        if len(data) < 10:
-            return None, None, data, False
-        payload_len = struct.unpack('>Q', data[idx:idx+8])[0]
-        idx += 8
-    if masked:
-        if len(data) < idx + 4:
-            return None, None, data, False
-        mask = data[idx:idx+4]
-        idx += 4
-    else:
-        mask = None
-    if len(data) < idx + payload_len:
-        return None, None, data, False
-    payload = data[idx:idx+payload_len]
-    if mask:
-        payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-    remaining = data[idx+payload_len:]
-    return opcode, payload, remaining, fin
-
-
-def encode_websocket_frame(payload: bytes, opcode: int = 0x2) -> bytes:
-    """Encode a WebSocket frame (unmasked, server -> client)."""
-    frame = bytearray()
-    frame.append(0x80 | opcode)  # FIN + opcode
-    length = len(payload)
-    if length < 126:
-        frame.append(length)
-    elif length < 65536:
-        frame.append(126)
-        frame.extend(struct.pack('>H', length))
-    else:
-        frame.append(127)
-        frame.extend(struct.pack('>Q', length))
-    frame.extend(payload)
-    return bytes(frame)
+REAL_HOST_HEADER_NAMES = (b"X-Real-Host", b"X-Online-Host", b"X-Forward-Host")
+SHARED_PASS_HEADER_NAMES = (b"X-Pass", b"X-Password")
 
 
 @dataclass
@@ -120,6 +67,21 @@ class ConnectionHandler(threading.Thread):
         self.settings = settings
         self.target: Optional[socket.socket] = None
 
+    @staticmethod
+    def _find_header(raw: bytes, name: bytes) -> Optional[bytes]:
+        lowered = raw.lower()
+        marker = name.lower() + b":"
+        idx = lowered.find(marker)
+        if idx == -1:
+            return None
+        start = idx + len(marker)
+        end = raw.find(b"\\r\\n", start)
+        if end == -1:
+            end = raw.find(b"\\n", start)
+        if end == -1:
+            return None
+        return raw[start:end].strip()
+
     def _read_headers(self) -> bytes:
         raw = b""
         self.client.settimeout(INITIAL_READ_TIMEOUT)
@@ -130,8 +92,9 @@ class ConnectionHandler(threading.Thread):
         if not chunk:
             return b""
         raw += chunk
+
         self.client.settimeout(HEADER_SETTLE_TIMEOUT)
-        while len(raw) < BUFLEN and not (b"\r\n\r\n" in raw or b"\n\n" in raw):
+        while len(raw) < BUFLEN and not (b"\\r\\n\\r\\n" in raw or b"\\n\\n" in raw):
             try:
                 chunk = self.client.recv(BUFLEN - len(raw))
             except socket.timeout:
@@ -144,11 +107,31 @@ class ConnectionHandler(threading.Thread):
         self.client.settimeout(None)
         return raw
 
-    def _safe_send(self, sock: socket.socket, data: bytes):
-        try:
-            sock.sendall(data)
-        except OSError:
-            pass
+    def _find_any_header(self, raw: bytes, names) -> Optional[bytes]:
+        for name in names:
+            val = self._find_header(raw, name)
+            if val is not None:
+                return val
+        return None
+
+    def _resolve_backend(self, raw_request: bytes):
+        real_host = self._find_any_header(raw_request, REAL_HOST_HEADER_NAMES)
+        shared_pass = self._find_any_header(raw_request, SHARED_PASS_HEADER_NAMES)
+
+        if real_host:
+            host_port = real_host.decode(errors="ignore")
+            host, _, port_str = host_port.partition(":")
+            port = int(port_str) if port_str.isdigit() else self.settings.default_backend_port
+
+            allowed = host in ("127.0.0.1", "localhost")
+            if not allowed and self.settings.shared_pass:
+                allowed = shared_pass and shared_pass.decode(errors="ignore") == self.settings.shared_pass
+
+            if not allowed:
+                return None
+            return host, port
+
+        return self.settings.default_backend_host, self.settings.default_backend_port
 
     def run(self):
         try:
@@ -156,115 +139,94 @@ class ConnectionHandler(threading.Thread):
             if not raw:
                 return
 
-            headers = parse_headers(raw)
-            upgrade = headers.get("upgrade", "").lower()
-            if upgrade != "websocket":
-                # Not a WebSocket upgrade – close politely
-                self._safe_send(self.client, b"HTTP/1.1 400 Bad Request\r\n\r\n")
-                self.client.close()
+            backend = self._resolve_backend(raw)
+            if backend is None:
+                self._safe_send(self.client, REJECT_RESPONSE)
                 return
 
-            key = headers.get("sec-websocket-key", "")
-            if not key:
-                self._safe_send(self.client, b"HTTP/1.1 400 Bad Request\r\n\r\n")
-                self.client.close()
-                return
+            if b"\\r\\n\\r\\n" in raw:
+                idx = raw.find(b"\\r\\n\\r\\n")
+                leftover = raw[idx + 4:]
+                had_header = True
+            elif b"\\n\\n" in raw:
+                idx = raw.find(b"\\n\\n")
+                leftover = raw[idx + 2:]
+                had_header = True
+            else:
+                leftover = raw
+                had_header = False
 
-            accept = compute_websocket_accept(key)
-            response = (
-                f"HTTP/1.1 101 Switching Protocols\r\n"
-                f"Upgrade: websocket\r\n"
-                f"Connection: Upgrade\r\n"
-                f"Sec-WebSocket-Accept: {accept}\r\n"
-                f"\r\n"
-            ).encode()
-            self._safe_send(self.client, response)
-
-            # Connect to backend (dropbear)
+            host, port = backend
             try:
-                self.target = socket.create_connection(
-                    (self.settings.default_backend_host, self.settings.default_backend_port),
-                    timeout=10
-                )
+                self.target = socket.create_connection((host, port), timeout=10)
             except OSError as e:
-                logger.warning("backend connect failed: %s", e)
-                self.client.close()
+                logger.warning("backend connect failed %s:%s - %s", host, port, e)
+                self._safe_send(self.client, REJECT_RESPONSE)
                 return
 
-            logger.info("WebSocket tunnel open: %s -> %s:%s",
-                        self.addr, self.settings.default_backend_host, self.settings.default_backend_port)
+            first_line = raw.split(b"\\n", 1)[0].strip(b"\\r")
+            if raw.startswith(b"SSH-") or (not had_header and not first_line.upper().startswith(
+                (b"GET", b"POST", b"HEAD", b"PUT", b"CONNECT", b"OPTIONS")
+            )):
+                response = None
+            elif first_line.upper().startswith(b"CONNECT "):
+                response = CONNECT_RESPONSE
+            else:
+                response = FAKE_UPGRADE_RESPONSE
 
-            # Relay with WebSocket framing
-            self._relay_ws()
+            if response is not None:
+                self._safe_send(self.client, response)
+            if leftover:
+                self._safe_send(self.target, leftover)
 
+            logger.info("tunnel open: %s -> %s:%s", self.addr, host, port)
+            self._relay()
         except Exception as e:
             logger.debug("connection error from %s: %s", self.addr, e)
         finally:
             self._close_all()
 
-    def _relay_ws(self):
-        """Relay data with WebSocket framing."""
-        client = self.client
-        backend = self.target
-        sockets = [client, backend]
-        idle_rounds = 0
-        # Buffer for partial WebSocket frames
-        read_buffer = b""
+    @staticmethod
+    def _safe_send(sock: socket.socket, data: bytes):
+        try:
+            sock.sendall(data)
+        except OSError:
+            pass
 
+    def _relay(self):
+        socs = [self.client, self.target]
+        idle_rounds = 0
         while True:
             try:
-                rlist, _, _ = select.select(sockets, [], sockets, SELECT_TIMEOUT)
+                readable, _, errored = select.select(socs, [], socs, SELECT_TIMEOUT)
             except (OSError, ValueError):
                 break
-            if not rlist:
+            if errored:
+                break
+            if readable:
+                idle_rounds = 0
+                closed = False
+                for s in readable:
+                    try:
+                        data = s.recv(BUFLEN)
+                    except OSError:
+                        closed = True
+                        break
+                    if not data:
+                        closed = True
+                        break
+                    dest = self.target if s is self.client else self.client
+                    try:
+                        dest.sendall(data)
+                    except OSError:
+                        closed = True
+                        break
+                if closed:
+                    break
+            else:
                 idle_rounds += 1
                 if idle_rounds >= IDLE_TIMEOUT_ROUNDS:
                     break
-                continue
-            idle_rounds = 0
-
-            for sock in rlist:
-                if sock is client:
-                    # Read from WebSocket client
-                    try:
-                        data = sock.recv(BUFLEN)
-                    except OSError:
-                        return
-                    if not data:
-                        return
-                    read_buffer += data
-                    # Process all complete frames
-                    while True:
-                        opcode, payload, remaining, fin = decode_websocket_frame(read_buffer)
-                        if opcode is None:
-                            # Need more data
-                            break
-                        if opcode == 0x8:  # Close frame
-                            # Send close frame back
-                            self._safe_send(client, encode_websocket_frame(payload, opcode=0x8))
-                            return
-                        if opcode == 0x2 or opcode == 0x1:  # binary or text
-                            # Forward payload to backend
-                            try:
-                                backend.sendall(payload)
-                            except OSError:
-                                return
-                        read_buffer = remaining
-
-                elif sock is backend:
-                    # Read from backend (dropbear) and send as WebSocket frame
-                    try:
-                        data = sock.recv(BUFLEN)
-                    except OSError:
-                        return
-                    if not data:
-                        return
-                    # Send as a binary WebSocket frame (opcode 0x2)
-                    frame = encode_websocket_frame(data, opcode=0x2)
-                    try:
-                        client.sendall(frame)
-                    except OSError:
-                        return
 
     def _close_all(self):
         for s in (self.client, self.target):
@@ -292,7 +254,7 @@ class ProxyServer:
         self._sock.listen(128)
 
         logger.info(
-            "wsproxy listening on %s:%s, backend %s:%s (WebSocket)",
+            "wsproxy listening on %s:%s, backend %s:%s",
             self.settings.listen_host, self.settings.listen_port,
             self.settings.default_backend_host, self.settings.default_backend_port,
         )
@@ -312,7 +274,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--listen", default="127.0.0.1:109", help="listen address:port")
     parser.add_argument("--backend", default="127.0.0.1:143", help="backend address:port")
-    parser.add_argument("--shared-pass", help="optional shared password (not used in this version)")
+    parser.add_argument("--shared-pass", help="optional shared password for host header routing")
     args = parser.parse_args()
 
     listen_host, listen_port_str = args.listen.split(":")
@@ -330,3 +292,68 @@ def main():
 
 if __name__ == "__main__":
     main()
+'''
+
+
+class WebSocketProxyFeature(BaseFeature):
+    name = "websocket_proxy"
+    description = "WebSocket-to-TCP bridge (required for nginx ↔ dropbear)"
+    depends_on = ["packages", "dropbear_service"]
+
+    def is_installed(self) -> bool:
+        return PROXY_SERVICE_PATH.exists() and self._service_enabled()
+
+    def install(self) -> None:
+        data = state.ensure_defaults()
+        proxy_port = data.get("websocket_proxy_port", PROXY_PORT_DEFAULT)
+        dropbear_port = data.get("dropbear_port", DROPBEAR_PORT_DEFAULT)
+
+        # Write the proxy script
+        self._write_script()
+
+        # Write the systemd service file
+        service_content = f"""# Managed by sshauto - do not edit
+[Unit]
+Description=SSHauto WebSocket-to-TCP proxy
+After=network.target dropbear.service
+Wants=dropbear.service
+
+[Service]
+Type=simple
+WorkingDirectory={APP_ROOT}
+ExecStart=/usr/bin/python3 {PROXY_SCRIPT_PATH} --listen 127.0.0.1:{proxy_port} --backend 127.0.0.1:{dropbear_port}
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:{LOG_DIR}/proxy.log
+StandardError=append:{LOG_DIR}/proxy.log
+
+[Install]
+WantedBy=multi-user.target
+"""
+        PROXY_SERVICE_PATH.write_text(service_content)
+        Shell.run("systemctl daemon-reload")
+        Shell.run(f"systemctl enable {PROXY_SERVICE_NAME}")
+        Shell.run(f"systemctl restart {PROXY_SERVICE_NAME}")
+
+        state.set("websocket_proxy_port", proxy_port)
+        log.success(f"WebSocket proxy listening on 127.0.0.1:{proxy_port}, backend dropbear:{dropbear_port}")
+
+        # Now regenerate nginx config to point to the proxy
+        from features.nginx_relay import NginxRelayFeature
+        NginxRelayFeature().regenerate()
+
+    def remove(self) -> None:
+        Shell.run(f"systemctl disable --now {PROXY_SERVICE_NAME}", check=False)
+        PROXY_SERVICE_PATH.unlink(missing_ok=True)
+        Shell.run("systemctl daemon-reload", check=False)
+        log.success("WebSocket proxy removed")
+
+    def _write_script(self) -> None:
+        """Write the proxy script to disk."""
+        PROXY_SCRIPT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        PROXY_SCRIPT_PATH.write_text(PROXY_SCRIPT_CONTENT)
+        PROXY_SCRIPT_PATH.chmod(0o755)
+
+    def _service_enabled(self) -> bool:
+        result = Shell.run(f"systemctl is-enabled {PROXY_SERVICE_NAME}", check=False)
+        return result.ok and "enabled" in result.stdout
