@@ -104,7 +104,7 @@ class NginxRelayFeature(BaseFeature):
         return (
             base_tpl_path.read_text()
             .replace("@HTTP_LISTEN_BLOCK@", http_listen_block)
-            .replace("@DROPBEAR_PORT@", str(dropbear_port))
+            .replace("@PROXY_PORT@", str(proxy_port))
             .replace("@HTTPS_SERVER_BLOCK@", https_server_block)
         )
 
