@@ -1,0 +1,21 @@
+=====================================================
+   Authorized access only. All activity is logged.
+=====================================================
+---BANNER---
+-------------------------------------------
+  Secure Gateway // Unauthorized use = ban
+-------------------------------------------
+---BANNER---
+###############################################
+#  Connection monitored. Behave accordingly.  #
+###############################################
+---BANNER---
+>>> Welcome. This session is being audited. <<<
+---BANNER---
+*** Restricted System - Authorized Users Only ***
+---BANNER---
+[ SYSTEM ] Encrypted channel established.
+---BANNER---
+~ You are entering a secured perimeter ~
+---BANNER---
+== Access logged. Have a productive session. ==
