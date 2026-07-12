@@ -74,7 +74,6 @@ class NginxRelayFeature(BaseFeature):
 
     def _render(self) -> str:
         data = state.ensure_defaults()
-        dropbear_port = data.get("dropbear_port", DROPBEAR_PORT_DEFAULT)
         proxy_port = data.get("websocket_proxy_port", 109)  # from proxy feature
         http_ports = sorted(HTTP_PORTS | set(data.get("custom_http_ports", [])))
         https_ports = sorted(HTTPS_PORTS | set(data.get("custom_https_ports", [])))
