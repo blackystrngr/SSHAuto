@@ -1,15 +1,13 @@
 """
-Firewall policy:
-  - IPv4: default-deny INPUT, allow loopback/established, allow SSH port,
-    dropbear port (loopback only - never exposed publicly), and every
-    HTTP_PORTS/HTTPS_PORTS the relay listens on.
-  - IPv6: dropped entirely (both via ip6tables default-deny AND disabling
-    ipv6 at the kernel level, belt-and-suspenders since some panels only
-    partially support ip6tables persistence).
+Firewall policy updated for SSHAuto:
+  - Flushes all existing rules completely.
+  - Allows loopback traffic and established connections.
+  - Opens explicit HTTP ports (80, 8080, 8880) and HTTPS ports (8443, 2096).
+  - Drops everything else on INPUT/FORWARD.
 """
 from __future__ import annotations
 
-from core.config import DROPBEAR_PORT_DEFAULT, HTTP_PORTS, HTTPS_PORTS, SSH_PORT_DEFAULT, state
+from core.config import state
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
@@ -17,7 +15,7 @@ from features.base import BaseFeature
 
 class FirewallFeature(BaseFeature):
     name = "firewall"
-    description = "Configure iptables, block IPv6 entirely"
+    description = "Flush iptables and configure explicit proxy ports"
     depends_on = ["packages"]
 
     def is_installed(self) -> bool:
@@ -25,15 +23,15 @@ class FirewallFeature(BaseFeature):
         return result.ok and "DROP" in result.stdout
 
     def install(self) -> None:
-        data = state.ensure_defaults()
-        ssh_port = data.get("ssh_port", SSH_PORT_DEFAULT)
-        all_ports = sorted(HTTP_PORTS | HTTPS_PORTS
-                            | set(data.get("custom_http_ports", []))
-                            | set(data.get("custom_https_ports", [])))
+        # Explicit target ports requested by the architecture
+        http_ports = [80, 8080, 8880]
+        https_ports = [8443, 2096]
+        all_ports = sorted(http_ports + https_ports)
 
-        log.info("flushing existing IPv4 rules")
-        for chain in ("INPUT", "FORWARD", "OUTPUT"):
-            Shell.run(f"iptables -F {chain}", check=False)
+        log.info("Flushing all existing iptables rules across all tables...")
+        for table in ("filter", "nat", "mangle"):
+            Shell.run(f"iptables -t {table} -F", check=False)
+            Shell.run(f"iptables -t {table} -X", check=False)
 
         base_rules = [
             "iptables -P INPUT DROP",
@@ -42,40 +40,33 @@ class FirewallFeature(BaseFeature):
             "iptables -A INPUT -i lo -j ACCEPT",
             "iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
             "iptables -A INPUT -p icmp --icmp-type echo-request -j ACCEPT",
-            f"iptables -A INPUT -p tcp --dport {ssh_port} -j ACCEPT",
         ]
+        
+        # Open explicit TCP ports for the Nginx front-end relay
         for port in all_ports:
             base_rules.append(f"iptables -A INPUT -p tcp --dport {port} -j ACCEPT")
 
         for rule in base_rules:
             Shell.run(rule)
-        log.success(f"IPv4: allowed ssh:{ssh_port} + {len(all_ports)} relay ports, "
-                     "default DROP for everything else")
-
-        # dropbear itself only ever binds 127.0.0.1, so it needs no public
-        # firewall rule at all — that's the point of fronting it via nginx.
-        log.debug(f"dropbear stays on loopback:{data.get('dropbear_port', DROPBEAR_PORT_DEFAULT)}, "
-                   "not exposed by the firewall")
+            
+        log.success(f"IPv4: Configured default DROP policy and allowed relay ports: {all_ports}")
 
         self._block_ipv6()
         self._persist()
 
     def remove(self) -> None:
-        log.warning("resetting iptables to ACCEPT-all (firewall disabled)")
-        for chain in ("INPUT", "FORWARD", "OUTPUT"):
-            Shell.run(f"iptables -P {chain} ACCEPT", check=False)
-            Shell.run(f"iptables -F {chain}", check=False)
+        log.warning("Resetting iptables to default ACCEPT policies (Firewall disabled)")
+        for table in ("filter", "nat", "mangle"):
+            for chain in ("INPUT", "FORWARD", "OUTPUT"):
+                Shell.run(f"iptables -t {table} -P {chain} ACCEPT", check=False)
+                Shell.run(f"iptables -t {table} -F {chain}", check=False)
 
     def _block_ipv6(self):
-        log.info("blocking IPv6 (ip6tables default-deny + kernel disable)")
+        log.info("Enforcing system-wide IPv6 block (ip6tables drop + kernel sysctl)")
         Shell.run("ip6tables -F", check=False)
-        for rule in (
-            "ip6tables -P INPUT DROP",
-            "ip6tables -P FORWARD DROP",
-            "ip6tables -P OUTPUT DROP",
-        ):
+        for rule in ("ip6tables -P INPUT DROP", "ip6tables -P FORWARD DROP", "ip6tables -P OUTPUT DROP"):
             Shell.run(rule, check=False)
-        # Defense in depth: also disable ipv6 at the kernel/sysctl level.
+            
         sysctl_conf = (
             "net.ipv6.conf.all.disable_ipv6 = 1\n"
             "net.ipv6.conf.default.disable_ipv6 = 1\n"
@@ -86,15 +77,12 @@ class FirewallFeature(BaseFeature):
                 f.write(sysctl_conf)
             Shell.run("sysctl --system", check=False)
         except OSError as exc:
-            log.warning(f"could not write sysctl drop-in: {exc}")
+            log.warning(f"Could not write sysctl drop-in: {exc}")
 
     def _persist(self):
-        # netfilter-persistent (from iptables-persistent) if present,
-        # otherwise fall back to a manual save + a small restore unit.
         if Shell.exists("netfilter-persistent"):
             Shell.run("netfilter-persistent save", check=False)
             return
         Shell.run("mkdir -p /etc/iptables", check=False)
         Shell.run("sh -c 'iptables-save > /etc/iptables/rules.v4'", check=False)
         Shell.run("sh -c 'ip6tables-save > /etc/iptables/rules.v6'", check=False)
-        log.debug("saved rules to /etc/iptables/rules.v4 (no netfilter-persistent found)")
