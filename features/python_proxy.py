@@ -135,7 +135,7 @@ def decode_frame(data):
     return opcode, payload, remaining
 
 def encode_frame(opcode, payload, mask=False):
-    """Encode a WebSocket frame."""
+    """Encode a WebSocket frame (server->client, unmasked by default)."""
     b1 = 0x80 | (opcode & 0x0F)  # fin=1
     payload_len = len(payload)
     header = bytearray()
@@ -149,24 +149,90 @@ def encode_frame(opcode, payload, mask=False):
         header.append((0x80 if mask else 0x00) | 127)
         header.extend(struct.pack(">Q", payload_len))
     if mask:
-        mask_key = b'\\x00\\x01\\x02\\x03'  # dummy, not actually used for server->client
+        mask_key = b'\\x00\\x01\\x02\\x03'
         header.extend(mask_key)
         payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
     return header + payload
 
+def parse_headers(data):
+    lines = data.decode('utf-8', errors='ignore').split('\\r\\n')
+    headers = {{}}
+    for line in lines[1:]:
+        if ': ' in line:
+            k, v = line.split(': ', 1)
+            headers[k.lower()] = v
+    return headers
+
 # ---------- proxy logic ----------
-async def handle_client(reader, writer):
+async def pipe_raw(src_reader, dst_writer):
+    """Blind byte pump, used for non-WebSocket (direct) connections."""
     try:
-        # read HTTP request
-        request = await reader.read(4096)
-        if not request:
+        while True:
+            data = await src_reader.read(8192)
+            if not data:
+                break
+            dst_writer.write(data)
+            await dst_writer.drain()
+    except Exception as e:
+        log.error(f"pipe_raw error: {{e}}")
+
+async def handle_client(reader, writer):
+    db_writer = None
+    try:
+        # Read until we have the full header block -- a single recv() is not
+        # guaranteed to contain the whole HTTP upgrade request.
+        request = b''
+        while b'\\r\\n\\r\\n' not in request:
+            chunk = await reader.read(8192)
+            if not chunk:
+                return
+            request += chunk
+            if len(request) > 65536:
+                writer.write(b"HTTP/1.1 431 Request Header Fields Too Large\\r\\n\\r\\n")
+                await writer.drain()
+                return
+            if len(request) >= 16 and not (b'\\r\\n\\r\\n' in request) and b'\\n' not in request[:16] and not request[:4].isupper():
+                # Doesn't look like it's building toward HTTP headers at all
+                # (e.g. raw SSH banner) -- stop waiting and treat as direct.
+                break
+
+        header_end = request.find(b'\\r\\n\\r\\n')
+
+        if header_end == -1 or request.startswith(b'SSH-'):
+            # No HTTP header block found, or this is a raw SSH client
+            # connecting directly -- pure TCP passthrough, no response sent.
+            try:
+                db_reader, db_writer = await asyncio.open_connection('127.0.0.1', DROPBEAR_PORT)
+            except Exception as e:
+                log.error(f"Can't connect to dropbear (direct): {{e}}")
+                writer.close()
+                return
+            if request:
+                db_writer.write(request)
+                await db_writer.drain()
+            log.info(f"direct tunnel open from {{writer.get_extra_info('peername')}}")
+            await asyncio.gather(pipe_raw(reader, db_writer), pipe_raw(db_reader, writer))
             return
-        headers = parse_headers(request)
+
+        header_end += 4
+        headers = parse_headers(request[:header_end])
+        leftover = request[header_end:]
+
         if headers.get('upgrade', '').lower() != 'websocket':
-            writer.write(b"HTTP/1.1 400 Bad Request\\r\\n\\r\\n")
-            await writer.drain()
+            # HTTP-looking but not a WS upgrade -- pass through raw too.
+            try:
+                db_reader, db_writer = await asyncio.open_connection('127.0.0.1', DROPBEAR_PORT)
+            except Exception as e:
+                log.error(f"Can't connect to dropbear (direct): {{e}}")
+                writer.close()
+                return
+            if request:
+                db_writer.write(request)
+                await db_writer.drain()
+            await asyncio.gather(pipe_raw(reader, db_writer), pipe_raw(db_reader, writer))
             return
-        # accept handshake
+
+        # ---- real WebSocket upgrade ----
         key = headers.get('sec-websocket-key', '')
         accept = base64.b64encode(sha1(key.encode() + b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest()).decode()
         response = (
@@ -179,7 +245,6 @@ async def handle_client(reader, writer):
         await writer.drain()
         log.info(f"WebSocket handshake accepted from {{writer.get_extra_info('peername')}}")
 
-        # connect to dropbear
         try:
             db_reader, db_writer = await asyncio.open_connection('127.0.0.1', DROPBEAR_PORT)
         except Exception as e:
@@ -187,39 +252,42 @@ async def handle_client(reader, writer):
             writer.close()
             return
 
-        # forward WebSocket frames -> dropbear
+        buffer = bytearray(leftover)  # keep any frame bytes that arrived with the handshake
+
         async def ws_to_tcp():
-            buffer = b''
+            nonlocal buffer
             while True:
                 try:
-                    data = await reader.read(8192)
-                    if not data:
-                        break
-                    buffer += data
-                    while buffer:
-                        opcode, payload, remaining = decode_frame(buffer)
+                    if not buffer:
+                        data = await reader.read(8192)
+                        if not data:
+                            break
+                        buffer += data
+                    while True:
+                        opcode, payload, remaining = decode_frame(bytes(buffer))
                         if opcode is None:
                             break  # incomplete frame, wait for more
-                        if opcode == 0x08:  # close
-                            log.info("Received close frame")
-                            writer.close()
+                        buffer = bytearray(remaining)
+                        if opcode == 0x08:                    # close
                             return
-                        if opcode == 0x02 or opcode == 0x01:  # binary or text
+                        elif opcode == 0x09:                  # ping -> pong
+                            writer.write(encode_frame(0x0A, payload))
+                            await writer.drain()
+                        elif opcode == 0x0A:                  # pong, ignore
+                            pass
+                        elif opcode in (0x00, 0x01, 0x02):    # continuation/text/binary all carry stream data
                             db_writer.write(payload)
                             await db_writer.drain()
-                        buffer = remaining
                 except Exception as e:
                     log.error(f"ws_to_tcp error: {{e}}")
                     break
 
-        # forward dropbear -> WebSocket frames
         async def tcp_to_ws():
             while True:
                 try:
                     data = await db_reader.read(8192)
                     if not data:
                         break
-                    # send as binary frame
                     frame = encode_frame(0x02, data, mask=False)
                     writer.write(frame)
                     await writer.drain()
@@ -233,20 +301,12 @@ async def handle_client(reader, writer):
         log.error(f"handle_client exception: {{e}}")
     finally:
         writer.close()
-        try:
-            db_writer.close()
-        except:
-            pass
+        if db_writer is not None:
+            try:
+                db_writer.close()
+            except Exception:
+                pass
         log.info("Connection closed")
-
-def parse_headers(data):
-    lines = data.decode('utf-8', errors='ignore').split('\\r\\n')
-    headers = {{}}
-    for line in lines[1:]:
-        if ': ' in line:
-            k, v = line.split(': ', 1)
-            headers[k.lower()] = v
-    return headers
 
 async def main():
     server = await asyncio.start_server(handle_client, '127.0.0.1', PROXY_PORT)
