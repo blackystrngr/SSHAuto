@@ -12,9 +12,7 @@ class CertificatesFeature(BaseFeature):
     name = "certificates"
     description = "Direct Cloudflare Origin CA Certificate Provisioner"
     depends_on = ["packages"]
-    
-    # Keeps the 30-second background loop from constantly prompting for input
-    idempotent = False 
+    idempotent = False   # interactive, never auto-run
 
     def is_installed(self) -> bool:
         return state.get("cert_strategy") == "cloudflare_origin" and \
@@ -29,28 +27,22 @@ class CertificatesFeature(BaseFeature):
 
         email = input("Cloudflare Account Email: ").strip()
         api_key = input("Cloudflare Global API Key: ").strip()
-
         if not email or not api_key:
             raise Exception("Both Email and Global API Key are strictly required.")
 
-        # 1. Define paths matching the convention layout
         cert_dir = Path("/var/lib/sshauto/certs")
         cert_dir.mkdir(parents=True, exist_ok=True)
-        
         key_path = cert_dir / "server.key"
         crt_path = cert_dir / "server.crt"
         csr_path = Path("/tmp/sshauto_cf.csr")
 
-        # 2. Generate local private key and CSR via standard OpenSSL
         log.info("Generating local Private Key and Certificate Signing Request (CSR)...")
         Shell.run(f"rm -f {key_path} {crt_path} {csr_path}", check=False)
-        
         Shell.run(f"openssl genrsa -out {key_path} 2048", check=True)
         Shell.run(f"openssl req -new -key {key_path} -out {csr_path} -subj '/CN={domain}'", check=True)
-        
+
         csr_content = csr_path.read_text()
 
-        # 3. Payload configuration for the Cloudflare v4 Certificate endpoint
         url = "https://api.cloudflare.com/client/v4/certificates"
         headers = {
             "X-Auth-Email": email,
@@ -59,43 +51,38 @@ class CertificatesFeature(BaseFeature):
         }
         payload = {
             "hostnames": [domain, f"*.{domain}"],
-            "requested_validity": 5475,  # 15 Years (Maximum permissible by Cloudflare)
+            "requested_validity": 5475,   # 15 years
             "request_type": "origin-rsa",
             "csr": csr_content
         }
 
         log.info("Transmitting CSR directly to Cloudflare API...")
         req = urllib.request.Request(
-            url, 
-            data=json.dumps(payload).encode("utf-8"), 
-            headers=headers, 
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
             method="POST"
         )
 
         try:
             with urllib.request.urlopen(req, timeout=30) as response:
                 res_data = json.loads(response.read().decode("utf-8"))
-                
                 if res_data.get("success"):
                     cert_content = res_data["result"]["certificate"]
                     crt_path.write_text(cert_content.strip() + "\n")
-                    
-                    # Lock down file permissions for security
                     os.chmod(key_path, 0o600)
                     os.chmod(crt_path, 0o644)
-                    
                     state.set("cert_strategy", "cloudflare_origin")
                     state.set("cert_domain", domain)
                     log.success(f"15-Year Cloudflare Certificate successfully generated for {domain}")
                 else:
                     errors = res_data.get("errors", [])
                     raise Exception(f"Cloudflare API rejected request: {errors}")
-                    
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8", errors="ignore")
             try:
                 parsed_err = json.loads(err_body)
-                err_msg = parsed_err.get("errors", [{}])[0].get("message", err_body)
+                err_msg = parsed_err.get("errors", [])[0].get("message", err_body)
             except Exception:
                 err_msg = err_body
             raise Exception(f"Cloudflare API Connection Failed ({e.code}): {err_msg}")
@@ -111,8 +98,7 @@ class CertificatesFeature(BaseFeature):
         print("="*50)
         print("1. Provision Direct Cloudflare Origin CA Certificate (15 Years)")
         print("0. Cancel / Skip")
-        print("-" * 50)
-
+        print("-"*50)
         choice = input("Select option: ").strip()
         if choice != "1":
             log.warning("Certificate generation skipped.")
@@ -125,7 +111,7 @@ class CertificatesFeature(BaseFeature):
 
         self._generate_cloudflare_origin_cert(domain)
 
-        # Signal web infrastructure to reload configuration mapping instantly
+        # Reload Nginx to apply new certificate
         if Shell.run("systemctl is-active nginx", check=False).ok:
             log.info("Reloading Nginx to apply new Origin Certificate...")
             Shell.run("systemctl reload nginx", check=False)
