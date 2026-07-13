@@ -1,8 +1,14 @@
 import os
 from core.shell import Shell
 from core.logger import log
+from features.base import BaseFeature
 
-class PythonProxyFeature:
+class PythonProxyFeature(BaseFeature):
+    # 1. Mandatory attributes for the PluginManager
+    name = "python_proxy"
+    description = "Atomic WebSocket-to-TCP proxy with SSH server hardening"
+    depends_on = ["packages"]  # Ensures basic system packages are installed first
+
     def __init__(self):
         self.proxy_script = "/opt/sshauto/ws_proxy.py"
         self.service_file = "/etc/systemd/system/sshauto-proxy.service"
@@ -31,18 +37,23 @@ class PythonProxyFeature:
         else:
             log.warning(f"Could not find {self.sshd_config}. Skipping SSH hardening.")
 
-    def install(self):
-        # 1. Apply SSH Tuning first
+    # 2. Required method: is_installed
+    def is_installed(self) -> bool:
+        return os.path.exists(self.proxy_script) and os.path.exists(self.service_file)
+
+    # 3. Required method: install
+    def install(self) -> None:
+        # Step A: Apply SSH Tuning first
         self._harden_ssh_server()
 
-        # 2. Write the Atomic Proxy Script (Fixes stuck handshakes)
+        # Step B: Write the Atomic Proxy Script (Fixes stuck handshakes)
         log.info("Deploying Atomic WebSocket script...")
         script_content = r'''
 import asyncio
 
 # Configuration
 BACKEND_IP = "127.0.0.1"
-BACKEND_PORT = 110  # Dropbear port
+BACKEND_PORT = 110  # Ensure this matches your Dropbear port
 LISTEN_PORT = 8000
 
 async def pipe(reader, writer):
@@ -97,9 +108,9 @@ if __name__ == "__main__":
 '''
         os.makedirs("/opt/sshauto", exist_ok=True)
         with open(self.proxy_script, "w") as f:
-            f.write(script_content.strip())
+            f.write(script_content.strip() + "\n")
 
-        # 3. Create and start systemd service
+        # Step C: Create and start systemd service
         service_content = f"""[Unit]
 Description=SSHAuto WebSocket Proxy
 After=network.target
@@ -122,10 +133,8 @@ WantedBy=multi-user.target
         Shell.run("systemctl restart sshauto-proxy")
         log.info("WebSocket proxy installed and running on port 8000.")
 
-    def is_installed(self):
-        return os.path.exists(self.proxy_script)
-
-    def remove(self):
+    # 4. Required method: remove
+    def remove(self) -> None:
         Shell.run("systemctl stop sshauto-proxy", check=False)
         Shell.run("systemctl disable sshauto-proxy", check=False)
         if os.path.exists(self.service_file):
