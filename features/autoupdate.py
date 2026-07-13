@@ -1,9 +1,6 @@
 """
 Wires up scripts/autoupdate_check.py to run every 30 seconds via a
-systemd timer (chosen over a cron job for sub-minute resolution, and
-over a public webhook listener because that would mean exposing another
-port and validating inbound GitHub payloads for no real speed benefit —
-a 30s poll already satisfies "auto update within 30 secs of a commit").
+systemd timer.
 """
 from __future__ import annotations
 
