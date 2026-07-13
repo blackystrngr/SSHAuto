@@ -18,11 +18,12 @@ HTTP_PORTS = {80, 8080, 8880, 2052, 2082, 2086, 2095}
 HTTPS_PORTS = {443, 8443, 2053, 2083, 2087, 2096}
 
 SSH_PORT_DEFAULT = 22                 # real OpenSSH, direct access
-DROPBEAR_PORT_DEFAULT = 143           # dropbear, bound to 127.0.0.1 only,
-                                       # reached exclusively through the
-                                       # nginx websocket relay above.
+DROPBEAR_PORT_DEFAULT = 113           # dropbear tunnel backend
 PROXY_PORT_DEFAULT = 8000             # Python asyncio proxy (new relay)
 
+# Production core requirements
+PIP_PACKAGES = ["uvloop>=0.19.0"]
+USER_GROUP = "sshauto-users"
 
 # ----------------------------------------------------------------------
 # Filesystem paths (all as specified / conventional Debian-family paths)
@@ -32,80 +33,18 @@ NGINX_SITES_ENABLED = Path("/etc/nginx/sites-enabled")
 NGINX_RELAY_NAME = "sshauto-relay"
 
 SSHD_CONFIG = Path("/etc/ssh/sshd_config")
-SSH_BANNER_PATH = Path("/etc/ssh/sshauto_banner")
-
+SSH_BANNER_PATH = Path("/etc/ssh/sshd_banner")
+DROPBEAR_BANNER_PATH = Path("/etc/dropbear/banner")
 DROPBEAR_DEFAULTS_FILE = Path("/etc/default/dropbear")
-DROPBEAR_BANNER_PATH = Path("/etc/dropbear/sshauto_banner")
-
-FAIL2BAN_JAIL_LOCAL = Path("/etc/fail2ban/jail.local")
-FAIL2BAN_FILTER_DIR = Path("/etc/fail2ban/filter.d")
-
+APP_ROOT = Path("/opt/sshauto")
+SSHAUTO_CERT_DIR = Path("/var/lib/sshauto/certs")
 LETSENCRYPT_LIVE = Path("/etc/letsencrypt/live")
-SSHAUTO_CERT_DIR = Path("/etc/sshauto/certs")
-
-APP_ROOT = Path(os.environ.get("SSHAUTO_HOME", "/opt/sshauto"))
-STATE_DIR = Path("/etc/sshauto")
-STATE_FILE = STATE_DIR / "state.json"
-LOG_DIR = Path("/var/log/sshauto")
-
-SYSTEMD_DIR = Path("/etc/systemd/system")
-
-# ----------------------------------------------------------------------
-# Packages
-# ----------------------------------------------------------------------
-REQUIRED_PACKAGES = [
-    "iptables",              # firewall (also provides ip6tables)
-    "openssh-server",        # real ssh daemon
-    "dropbear",              # lightweight ssh, relayed over websocket
-    "nginx",                 # relay / reverse proxy
-    "certbot",                # ACME client
-    "python3",
-    "python3-pip",
-    "python3-venv",
-    "curl",
-    "wget",
-    "git",                   # required by the auto-updater
-    "fail2ban",               # brute-force protection
-    "socat",                  # used by certbot standalone / acme flows
-    "jq",                      # JSON parsing in shell helpers
-    "net-tools",               # netstat, used as ss fallback
-    "cron",
-    "unzip",
-    "openssl",
-    "uuid-runtime",
-    "dnsutils",               # dig, used for domain validation before ACME
-]
-
-REMOVE_PACKAGES = [
-    "apache2",
-    "apache2-bin",
-    "apache2-utils",
-    "apache2-data",
-    "ufw",
-    "firewalld",              # conflicts with our raw iptables rules
-]
-
-PIP_PACKAGES = [
-    "requests>=2.31",
-]
-
-# ----------------------------------------------------------------------
-# Misc
-# ----------------------------------------------------------------------
-GIT_POLL_INTERVAL_SECONDS = 30
-USER_GROUP = "sshauto-users"   # marker group for accounts created by us
 
 
 class StateStore:
-    """
-    Tiny JSON key/value store at /etc/sshauto/state.json.
-    Thread-safe, atomic writes (write-tmp + rename).
-    """
-
-    _lock = threading.Lock()
-
-    def __init__(self, path: Path = STATE_FILE):
+    def __init__(self, path: Path = Path("/var/lib/sshauto/state.json")):
         self.path = path
+        self._lock = threading.Lock()
 
     def _read(self) -> dict:
         if not self.path.exists():
