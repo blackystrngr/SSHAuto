@@ -1,166 +1,137 @@
 import os
+import json
+import urllib.request
+import urllib.error
 from pathlib import Path
 from core.shell import Shell
 from core.logger import log
-from core.config import state, LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR
+from core.config import state
 from features.base import BaseFeature
 
 class CertificatesFeature(BaseFeature):
     name = "certificates"
-    description = "Interactive SSL Certificate Wizard (Cloudflare API & Standalone)"
+    description = "Direct Cloudflare Origin CA Certificate Provisioner"
     depends_on = ["packages"]
     
-    # Set to False because we don't want the auto-updater 
-    # to randomly trigger interactive inputs every 30 seconds.
+    # Keeps the 30-second background loop from constantly prompting for input
     idempotent = False 
 
     def is_installed(self) -> bool:
-        return state.get("cert_strategy") is not None
+        return state.get("cert_strategy") == "cloudflare_origin" and \
+               os.path.exists("/var/lib/sshauto/certs/server.crt")
 
-    def _install_cloudflare_cert(self, domain: str):
-        print("\n" + "="*50)
-        print(" CLOUDFLARE API VALIDATION ".center(50))
-        print("="*50)
-        log.info("This method requires your Cloudflare Account Email and Global API Key.")
-        log.warning("Verification is done via DNS. Port 80 does NOT need to be open.\n")
+    def _generate_cloudflare_origin_cert(self, domain: str):
+        print("\n" + "="*60)
+        print(" CLOUDFLARE ORIGIN CA DIRECT PROVISIONER ".center(60))
+        print("="*60)
+        log.info("This will fetch a 15-year trusted Origin Certificate directly from Cloudflare.")
+        log.warning("Ensure your Cloudflare proxy (Orange Cloud) is ENABLED for this domain.\n")
 
-        email = input("Cloudflare Email: ").strip()
+        email = input("Cloudflare Account Email: ").strip()
         api_key = input("Cloudflare Global API Key: ").strip()
 
         if not email or not api_key:
-            raise Exception("Email and Global API Key are strictly required.")
+            raise Exception("Both Email and Global API Key are strictly required.")
 
-        # 1. Install Certbot and the Cloudflare DNS plugin
-        log.info("Installing Certbot and Cloudflare DNS plugins...")
-        Shell.run("apt-get update", check=False)
-        Shell.run("apt-get install -y certbot python3-certbot-dns-cloudflare", check=True)
-
-        # 2. Create the secure credentials file
-        secrets_dir = Path("/root/.secrets/certbot")
-        secrets_dir.mkdir(parents=True, exist_ok=True)
-        cf_ini = secrets_dir / "cloudflare.ini"
-
-        ini_content = f"dns_cloudflare_email = {email}\ndns_cloudflare_api_key = {api_key}\n"
-        cf_ini.write_text(ini_content)
+        # 1. Define paths matching the convention layout
+        cert_dir = Path("/var/lib/sshauto/certs")
+        cert_dir.mkdir(parents=True, exist_ok=True)
         
-        # Certbot will throw a security error if this file is readable by others
-        os.chmod(cf_ini, 0o600)
+        key_path = cert_dir / "server.key"
+        crt_path = cert_dir / "server.crt"
+        csr_path = Path("/tmp/sshauto_cf.csr")
 
-        # 3. Request the certificate
-        log.info(f"Requesting Let's Encrypt certificate for {domain} via Cloudflare API...")
-        cmd = (
-            f"certbot certonly --dns-cloudflare --dns-cloudflare-credentials {cf_ini} "
-            f"--dns-cloudflare-propagation-seconds 20 "
-            f"-d {domain} --non-interactive --agree-tos -m {email}"
+        # 2. Generate local private key and CSR via standard OpenSSL
+        log.info("Generating local Private Key and Certificate Signing Request (CSR)...")
+        Shell.run(f"rm -f {key_path} {crt_path} {csr_path}", check=False)
+        
+        Shell.run(f"openssl genrsa -out {key_path} 2048", check=True)
+        Shell.run(f"openssl req -new -key {key_path} -out {csr_path} -subj '/CN={domain}'", check=True)
+        
+        csr_content = csr_path.read_text()
+
+        # 3. Payload configuration for the Cloudflare v4 Certificate endpoint
+        url = "https://api.cloudflare.com/client/v4/certificates"
+        headers = {
+            "X-Auth-Email": email,
+            "X-Auth-Key": api_key,
+            "Content-Type": application/json"
+        }
+        payload = {
+            "hostnames": [domain, f"*.{domain}"],
+            "requested_validity": 5475,  # 15 Years (Maximum permissible by Cloudflare)
+            "request_type": "origin-rsa",
+            "csr": csr_content
+        }
+
+        log.info("Transmitting CSR directly to Cloudflare API...")
+        req = urllib.request.Request(
+            url, 
+            data=json.dumps(payload).encode("utf-8"), 
+            headers=headers, 
+            method="POST"
         )
 
-        res = Shell.run(cmd, check=False)
-        if not res.ok:
-            log.error(f"Certbot failed: {res.stderr}")
-            raise Exception("Failed to acquire Cloudflare certificate. Verify your Global API Key and Domain.")
-
-        # 4. Link and Save State
-        self._symlink_certbot(domain)
-        state.set("cert_strategy", "cloudflare")
-        state.set("cert_domain", domain)
-        log.success(f"Cloudflare SSL Certificate successfully acquired and applied for {domain}")
-
-    def _install_http_cert(self, domain: str):
-        print("\n" + "="*50)
-        print(" STANDARD HTTP VALIDATION ".center(50))
-        print("="*50)
-        email = input("Email for expiration notices: ").strip()
-        if not email: 
-            raise Exception("Email required.")
-
-        log.info("Installing Certbot...")
-        Shell.run("apt-get install -y certbot", check=True)
-
-        # Must free up port 80 for the standalone server
-        Shell.run("systemctl stop nginx", check=False)
-
-        log.info(f"Requesting HTTP-01 challenge for {domain}...")
-        cmd = f"certbot certonly --standalone -d {domain} --non-interactive --agree-tos -m {email}"
-        res = Shell.run(cmd, check=False)
-
-        Shell.run("systemctl start nginx", check=False)
-
-        if not res.ok:
-            raise Exception(f"Certbot failed: {res.stderr}")
-
-        self._symlink_certbot(domain)
-        state.set("cert_strategy", "http")
-        state.set("cert_domain", domain)
-        log.success(f"Let's Encrypt HTTP SSL successfully acquired for {domain}")
-
-    def _install_self_signed(self):
-        log.info("Generating Self-Signed Fallback Certificate...")
-        SSHAUTO_CERT_DIR.mkdir(parents=True, exist_ok=True)
-        crt = SSHAUTO_CERT_DIR / "server.crt"
-        key = SSHAUTO_CERT_DIR / "server.key"
-
-        cmd = (
-            f"openssl req -x509 -nodes -days 3650 -newkey rsa:2048 "
-            f"-keyout {key} -out {crt} -subj '/CN=sshauto-local'"
-        )
-        Shell.run(cmd, check=True)
-
-        state.set("cert_strategy", "self_signed")
-        state.set("cert_domain", "localhost")
-        log.success("Self-signed certificate generated. (Browsers will show a warning)")
-
-    def _symlink_certbot(self, domain: str):
-        """Links Certbot's live directory to the internal path Nginx expects."""
-        SSHAUTO_CERT_DIR.mkdir(parents=True, exist_ok=True)
-        live_dir = Path(f"/etc/letsencrypt/live/{domain}")
-
-        crt_dest = SSHAUTO_CERT_DIR / "server.crt"
-        key_dest = SSHAUTO_CERT_DIR / "server.key"
-
-        Shell.run(f"rm -f {crt_dest} {key_dest}", check=False)
-
-        os.symlink(live_dir / "fullchain.pem", crt_dest)
-        os.symlink(live_dir / "privkey.pem", key_dest)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                res_data = json.loads(response.read().decode("utf-8"))
+                
+                if res_data.get("success"):
+                    cert_content = res_data["result"]["certificate"]
+                    crt_path.write_text(cert_content.strip() + "\n")
+                    
+                    # Lock down file permissions for security
+                    os.chmod(key_path, 0o600)
+                    os.chmod(crt_path, 0o644)
+                    
+                    state.set("cert_strategy", "cloudflare_origin")
+                    state.set("cert_domain", domain)
+                    log.success(f"15-Year Cloudflare Certificate successfully generated for {domain}")
+                else:
+                    errors = res_data.get("errors", [])
+                    raise Exception(f"Cloudflare API rejected request: {errors}")
+                    
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8", errors="ignore")
+            try:
+                parsed_err = json.loads(err_body)
+                err_msg = parsed_err.get("errors", [{}])[0].get("message", err_body)
+            except Exception:
+                err_msg = err_body
+            raise Exception(f"Cloudflare API Connection Failed ({e.code}): {err_msg}")
+        except Exception as e:
+            raise Exception(f"Failed to communicate with Cloudflare: {e}")
+        finally:
+            if csr_path.exists():
+                csr_path.unlink()
 
     def install(self) -> None:
         print("\n" + "="*50)
-        print(" SSL/TLS CERTIFICATE WIZARD ".center(50))
+        print(" CERTIFICATE MANAGEMENT ".center(50))
         print("="*50)
-        print("1. Cloudflare API (Recommended, No Port 80 needed, uses Global API Key)")
-        print("2. Standard Let's Encrypt (Requires Port 80 and Domain pointed to IP)")
-        print("3. Self-Signed Certificate (For internal testing)")
-        print("0. Cancel")
+        print("1. Provision Direct Cloudflare Origin CA Certificate (15 Years)")
+        print("0. Cancel / Skip")
         print("-" * 50)
 
         choice = input("Select option: ").strip()
-        if choice == "0" or not choice:
-            log.warning("Certificate generation cancelled.")
+        if choice != "1":
+            log.warning("Certificate generation skipped.")
             return
 
-        if choice in ("1", "2"):
-            domain = input("\nEnter your fully qualified domain name (e.g., vpn.example.com): ").strip()
-            if not domain:
-                log.error("Domain is strictly required.")
-                return
-
-        if choice == "1":
-            self._install_cloudflare_cert(domain)
-        elif choice == "2":
-            self._install_http_cert(domain)
-        elif choice == "3":
-            self._install_self_signed()
-        else:
-            log.error("Invalid choice.")
+        domain = input("\nEnter your domain/subdomain (e.g., node1.yourdomain.com): ").strip()
+        if not domain:
+            log.error("Domain cannot be empty.")
             return
 
-        # Automatically reload Nginx to map the newly generated certificates
-        res = Shell.run("systemctl is-active nginx", check=False)
-        if res.ok:
-            log.info("Reloading Nginx proxy to apply new certificates...")
+        self._generate_cloudflare_origin_cert(domain)
+
+        # Signal web infrastructure to reload configuration mapping instantly
+        if Shell.run("systemctl is-active nginx", check=False).ok:
+            log.info("Reloading Nginx to apply new Origin Certificate...")
             Shell.run("systemctl reload nginx", check=False)
 
     def remove(self) -> None:
-        Shell.run(f"rm -rf {SSHAUTO_CERT_DIR}/*", check=False)
+        Shell.run("rm -f /var/lib/sshauto/certs/server.crt /var/lib/sshauto/certs/server.key", check=False)
         state.set("cert_strategy", None)
         state.set("cert_domain", None)
-        log.info("Certificates unlinked and removed from active state.")
+        log.info("Cloudflare certificates securely deleted from state.")
