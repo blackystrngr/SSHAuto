@@ -13,15 +13,13 @@ class UdpgwServiceFeature(BaseFeature):
     idempotent = True
 
     def is_installed(self) -> bool:
-        binary_exists = Path("/usr/local/bin/badvpn-udpgw").exists()
-        service_exists = Path("/etc/systemd/system/badvpn-udpgw.service").exists()
-        return binary_exists and service_exists
+        return Path("/usr/local/bin/badvpn-udpgw").exists() and \
+               Path("/etc/systemd/system/badvpn-udpgw.service").exists()
 
     def install(self) -> None:
         log.info("Ensuring compilation tools are available...")
         Shell.run("apt-get update -y && apt-get install -y cmake make git gcc g++", check=True)
 
-        # STEP 1: Compile badvpn-udpgw
         if not Path("/usr/local/bin/badvpn-udpgw").exists():
             log.info("Cloning and compiling badvpn-udpgw...")
             src_dir = Path("/tmp/badvpn_src")
@@ -41,42 +39,33 @@ class UdpgwServiceFeature(BaseFeature):
         else:
             log.info("badvpn-udpgw binary already available, skipping compilation.")
 
-        # STEP 2: Deploy systemd service – bind to 0.0.0.0:7300 (public)
-        log.info("Configuring badvpn-udpgw systemd service daemon...")
+        # Bind to 0.0.0.0:7300 (public)
         service_content = """[Unit]
-Description=BadVPN UDP Gateway Daemon for SSH Tunneling
+Description=BadVPN UDP Gateway Daemon
 After=network.target
 
 [Service]
-Type=simple
-User=root
 ExecStart=/usr/local/bin/badvpn-udpgw --loglevel warning --listen-addr 0.0.0.0:7300 --max-clients 1000 --max-connections-for-client 10
 Restart=always
-RestartSec=5
+RestartSec=3
+User=root
 
 [Install]
 WantedBy=multi-user.target
 """
         Path("/etc/systemd/system/badvpn-udpgw.service").write_text(service_content)
 
-        Shell.run("systemctl daemon-reload", check=True)
+        Shell.run("systemctl daemon-reload", timeout=10)
         Shell.run("systemctl enable badvpn-udpgw", check=True)
         Shell.run("systemctl restart badvpn-udpgw", check=True)
 
-        log.success("UDP Gateway service is fully deployed and active on port 7300 (public).")
+        log.success("UDP Gateway active on 0.0.0.0:7300.")
+        log.important("IMPORTANT: Open UDP port 7300 in your VPS provider's firewall.")
 
     def remove(self) -> None:
-        log.info("Teardown initiated for UDP Gateway component...")
-        Shell.run("systemctl stop badvpn-udpgw", check=False)
+        Shell.run("systemctl stop badvpn-udpgw", check=False, timeout=10)
         Shell.run("systemctl disable badvpn-udpgw", check=False)
-
-        service_file = Path("/etc/systemd/system/badvpn-udpgw.service")
-        if service_file.exists():
-            service_file.unlink()
-
-        binary_file = Path("/usr/local/bin/badvpn-udpgw")
-        if binary_file.exists():
-            binary_file.unlink()
-
-        Shell.run("systemctl daemon-reload", check=False)
-        log.success("UDP Gateway service stack fully uninstalled.")
+        Path("/etc/systemd/system/badvpn-udpgw.service").unlink(missing_ok=True)
+        Path("/usr/local/bin/badvpn-udpgw").unlink(missing_ok=True)
+        Shell.run("systemctl daemon-reload", timeout=10)
+        log.success("UDP Gateway removed.")
