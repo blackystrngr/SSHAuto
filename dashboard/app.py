@@ -1,7 +1,3 @@
-"""
-The interactive dashboard, launched by typing `kk` at the shell (see
-scripts/install_kk.sh for how that alias gets wired up).
-"""
 from __future__ import annotations
 
 from core.config import state
@@ -11,7 +7,6 @@ from dashboard import ui
 from dashboard.monitor import Monitor
 from dashboard.ports import PortManager
 from dashboard.users import UserManager
-
 
 class Dashboard:
     def __init__(self):
@@ -28,7 +23,6 @@ class Dashboard:
                 return
             self._dispatch(choice)
 
-    # -- screens ----------------------------------------------------------
     def _render_home(self):
         ui.clear()
         ui.header("sshauto dashboard", "type a number, or 'q' to quit")
@@ -36,7 +30,7 @@ class Dashboard:
         if stats:
             ui.kv_row("Active tunnels", str(stats.active_connections))
             ui.kv_row("Total accounts", str(stats.total_users))
-            ui.kv_row("Throughput", f"↓ {stats.rx_kbps} kbps   ↑ {stats.tx_kbps} kbps")
+            ui.kv_row("Throughput", f"↓ {stats.rx_kbps} kbps  ↑ {stats.tx_kbps} kbps")
         print()
         ui.menu([
             ("1", "Create SSH/websocket user"),
@@ -80,7 +74,7 @@ class Dashboard:
             pass
         ui.pause()
 
-    # -- actions ------------------------------------------------------
+    # ---------- action methods ----------
     def _create_user(self):
         ui.clear()
         ui.header("create user")
@@ -99,8 +93,7 @@ class Dashboard:
     def _list_users(self):
         ui.clear()
         ui.header("users", f"group: sshauto-users")
-        rows = [[u.username, u.expires, "locked" if u.locked else "active"]
-                for u in self.users.list()]
+        rows = [[u.username, u.expires, "locked" if u.locked else "active"] for u in self.users.list()]
         ui.table(["username", "expires", "status"], rows)
 
     def _live_view(self):
@@ -157,39 +150,33 @@ class Dashboard:
             from features.network_optimizer import NetworkOptimizerFeature
             optimizer = NetworkOptimizerFeature()
         except ImportError:
-            from core.logger import log
             log.error("NetworkOptimizerFeature module not found at features/network_optimizer.py")
             return
 
         while True:
-            from dashboard import ui
             ui.clear()
             ui.header("network acceleration hub", "optimize routing latency & bbr layers")
-            
+
             is_active = optimizer.is_installed()
             status_text = "ENABLED & OPTIMIZED" if is_active else "DISABLED (STOCK LINUX)"
             status_color = "\033[1;32m" if is_active else "\033[1;31m"
-            
             ui.kv_row("Current Profile Status", f"{status_color}{status_text}\033[0m")
-            
-            # FIXED: Removed capture_output=True
+
             from core.shell import Shell
             cc_res = Shell.run("sysctl net.ipv4.tcp_congestion_control", check=False)
             ss_res = Shell.run("sysctl net.ipv4.tcp_slow_start_after_idle", check=False)
-            
             cc = cc_res.stdout.strip() if cc_res.ok else "Unknown"
             ss = ss_res.stdout.strip() if ss_res.ok else "Unknown"
-            
             ui.kv_row("Kernel Alg", cc)
             ui.kv_row("Slow Start Config", ss)
             print()
-            
+
             ui.menu([
                 ("1", "Apply Extreme Low-Latency Profile + BBR (3x-ui Optimization)"),
                 ("2", "Remove Optimizations (Reset to OS Default)"),
                 ("0", "Back to Main Menu")
             ])
-            
+
             action = ui.prompt("Select action")
             if action == "0" or not action:
                 return
@@ -200,7 +187,6 @@ class Dashboard:
                     optimizer.install()
                     ui.prompt("\nExecution complete. Press Enter to continue...")
                 except Exception as e:
-                    from core.logger import log
                     log.error(f"Error during network tune: {e}")
                     ui.prompt("\nPress Enter to continue...")
             elif action == "2":
@@ -210,20 +196,17 @@ class Dashboard:
                     optimizer.remove()
                     ui.prompt("\nRollback complete. Press Enter to continue...")
                 except Exception as e:
-                    from core.logger import log
                     log.error(f"Error during rollback: {e}")
                     ui.prompt("\nPress Enter to continue...")
-                    
+
     def _safe_live_stats(self):
         try:
             return self.monitor.live_stats(sample_seconds=0.3)
-        except Exception:  # noqa: BLE001 - the home screen must never crash
+        except Exception:
             return None
-
 
 def main():
     Dashboard().run()
-
 
 if __name__ == "__main__":
     main()
