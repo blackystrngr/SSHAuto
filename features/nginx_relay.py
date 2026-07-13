@@ -1,24 +1,7 @@
-"""
-Builds /etc/nginx/sites-available/sshauto-relay.conf from the two
-templates and symlinks it into sites-enabled. Regenerated any time ports
-change (dashboard add/remove-port) or the cert changes.
-"""
-from __future__ import annotations
-
 from pathlib import Path
-
 from core.config import (
-    APP_ROOT,
-    DROPBEAR_PORT_DEFAULT,
-    PROXY_PORT_DEFAULT,
-    HTTP_PORTS,
-    HTTPS_PORTS,
-    NGINX_RELAY_NAME,
-    NGINX_SITES_AVAILABLE,
-    NGINX_SITES_ENABLED,
-    LETSENCRYPT_LIVE,
-    SSHAUTO_CERT_DIR,
-    state,
+    APP_ROOT, PROXY_PORT_DEFAULT, HTTP_PORTS, HTTPS_PORTS,
+    NGINX_SITES_AVAILABLE, NGINX_SITES_ENABLED, state
 )
 from core.exceptions import ConfigError
 from core.logger import log
@@ -26,36 +9,19 @@ from core.shell import Shell
 from features.base import BaseFeature
 
 TEMPLATES_DIR = APP_ROOT / "templates"
-
-CERT_SEARCH_PATHS = [
-    LETSENCRYPT_LIVE,
-    SSHAUTO_CERT_DIR,
-    Path("/etc/ssl/cloudflare"),
-    Path("/etc/ssl/certs"),
-]
-
-# Common certificate filename pairs to look for
-CERT_PAIRS = [
-    ("fullchain.pem", "privkey.pem"),
-    ("cert.pem", "key.pem"),
-    ("server.crt", "server.key"),
-    ("domain.crt", "domain.key"),
-    ("fullchain.crt", "privkey.key"),
-]
-
+NGINX_SITE_NAME = "ssh_tunnel"   # matches script
 
 class NginxRelayFeature(BaseFeature):
     name = "nginx_relay"
-    description = "Generate the nginx websocket relay (HTTP+HTTPS -> dropbear)"
     depends_on = ["packages", "dropbear_service", "python_proxy"]
 
     @property
     def available_path(self) -> Path:
-        return NGINX_SITES_AVAILABLE / f"{NGINX_RELAY_NAME}.conf"
+        return NGINX_SITES_AVAILABLE / NGINX_SITE_NAME
 
     @property
     def enabled_path(self) -> Path:
-        return NGINX_SITES_ENABLED / f"{NGINX_RELAY_NAME}.conf"
+        return NGINX_SITES_ENABLED / NGINX_SITE_NAME
 
     def is_installed(self) -> bool:
         return self.enabled_path.exists() or self.enabled_path.is_symlink()
@@ -63,6 +29,12 @@ class NginxRelayFeature(BaseFeature):
     def install(self) -> None:
         NGINX_SITES_AVAILABLE.mkdir(parents=True, exist_ok=True)
         NGINX_SITES_ENABLED.mkdir(parents=True, exist_ok=True)
+
+        # Remove old sshauto‑relay to avoid conflict
+        old_avail = NGINX_SITES_AVAILABLE / "sshauto-relay.conf"
+        old_enabled = NGINX_SITES_ENABLED / "sshauto-relay.conf"
+        old_avail.unlink(missing_ok=True)
+        old_enabled.unlink(missing_ok=True)
 
         self._disable_default_site()
         config_text = self._render()
@@ -74,7 +46,7 @@ class NginxRelayFeature(BaseFeature):
         Shell.run("nginx -t")
         Shell.run("systemctl enable nginx", check=False)
         Shell.run("systemctl reload nginx || systemctl restart nginx")
-        log.success(f"nginx relay written to {self.available_path} and reloaded")
+        log.success(f"nginx config written to {self.available_path}")
 
     def remove(self) -> None:
         Shell.run(f"rm -f {self.enabled_path}", check=False)
@@ -84,89 +56,76 @@ class NginxRelayFeature(BaseFeature):
         self.install()
 
     def _disable_default_site(self):
-        default_link = NGINX_SITES_ENABLED / "default"
-        if default_link.exists() or default_link.is_symlink():
-            default_link.unlink()
-            log.debug("disabled nginx's default site")
+        default = NGINX_SITES_ENABLED / "default"
+        if default.exists() or default.is_symlink():
+            default.unlink()
+            log.debug("disabled default site")
 
     def _render(self) -> str:
         data = state.ensure_defaults()
+        domain = data.get("cert_domain", "_")
         proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
         http_ports = sorted(HTTP_PORTS | set(data.get("custom_http_ports", [])))
         https_ports = sorted(HTTPS_PORTS | set(data.get("custom_https_ports", [])))
 
-        http_listen_block = "\n".join(f"    listen {p};" for p in http_ports)
+        # Use 0.0.0.0:port to match script exactly
+        http_listen = "\n".join(f"    listen 0.0.0.0:{p};" for p in http_ports)
 
-        https_server_block = ""
+        https_block = ""
         cert_path, key_path = self._resolve_cert_paths(data)
         if cert_path and key_path:
             https_tpl = (TEMPLATES_DIR / "nginx_relay_https.conf.tpl").read_text()
-            https_listen_block = "\n".join(f"    listen {p} ssl;" for p in https_ports)
-            https_server_block = (
+            https_listen = "\n".join(f"    listen 0.0.0.0:{p} ssl;" for p in https_ports)
+            https_block = (
                 https_tpl
-                .replace("@HTTPS_LISTEN_BLOCK@", https_listen_block)
+                .replace("@HTTPS_LISTEN_BLOCK@", https_listen)
                 .replace("@CERT_PATH@", cert_path)
                 .replace("@KEY_PATH@", key_path)
                 .replace("@PROXY_PORT@", str(proxy_port))
+                .replace("@DOMAIN@", domain)
             )
-            log.info(f"HTTPS block enabled with certificate: {cert_path}")
+            log.info(f"HTTPS enabled with cert {cert_path}")
         else:
-            log.warning("No certificate found – HTTPS relay ports will not be enabled.")
+            log.warning("No certificate found – HTTPS disabled.")
 
-        base_tpl_path = TEMPLATES_DIR / "nginx_relay.conf.tpl"
-        if not base_tpl_path.exists():
-            raise ConfigError(f"missing template {base_tpl_path}")
+        base_tpl = TEMPLATES_DIR / "nginx_relay.conf.tpl"
+        if not base_tpl.exists():
+            raise ConfigError(f"missing template {base_tpl}")
 
         return (
-            base_tpl_path.read_text()
-            .replace("@HTTP_LISTEN_BLOCK@", http_listen_block)
+            base_tpl.read_text()
+            .replace("@HTTP_LISTEN_BLOCK@", http_listen)
             .replace("@PROXY_PORT@", str(proxy_port))
-            .replace("@HTTPS_SERVER_BLOCK@", https_server_block)
+            .replace("@DOMAIN@", domain)
+            .replace("@HTTPS_SERVER_BLOCK@", https_block)
         )
 
-    def _resolve_cert_paths(self, data: dict) -> tuple[str | None, str | None]:
-        # 1. Check state
-        cert_path = data.get("cert_fullchain_path")
-        key_path = data.get("cert_key_path")
-        if cert_path and key_path and Path(cert_path).exists() and Path(key_path).exists():
-            return cert_path, key_path
+    def _resolve_cert_paths(self, data):
+        # Try state first
+        cert = data.get("cert_fullchain_path")
+        key = data.get("cert_key_path")
+        if cert and key and Path(cert).exists() and Path(key).exists():
+            return cert, key
 
-        domain = data.get("cert_domain")
+        # Check script's self‑signed location
+        script_cert = Path("/etc/ssl/certs/selfsigned.crt")
+        script_key = Path("/etc/ssl/private/selfsigned.key")
+        if script_cert.exists() and script_key.exists():
+            data["cert_fullchain_path"] = str(script_cert)
+            data["cert_key_path"] = str(script_key)
+            state.save(data)
+            return str(script_cert), str(script_key)
 
-        # 2. Search in standard directories
-        for base_dir in CERT_SEARCH_PATHS:
-            if not base_dir.exists():
+        # Look in common locations
+        from core.config import LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR
+        for base in [LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR, Path("/etc/ssl/cloudflare")]:
+            if not base.exists():
                 continue
-            # Domain subdirectory
-            if domain:
-                domain_dir = base_dir / domain
-                if domain_dir.exists():
-                    for cert_name, key_name in CERT_PAIRS:
-                        cert = domain_dir / cert_name
-                        key = domain_dir / key_name
-                        if cert.exists() and key.exists():
-                            data["cert_fullchain_path"] = str(cert)
-                            data["cert_key_path"] = str(key)
-                            state.save(data)
-                            return str(cert), str(key)
-            # Direct files in the base directory
-            for cert_name, key_name in CERT_PAIRS:
-                cert = base_dir / cert_name
-                key = base_dir / key_name
-                if cert.exists() and key.exists():
-                    data["cert_fullchain_path"] = str(cert)
-                    data["cert_key_path"] = str(key)
+            for f in base.glob("*/fullchain.pem"):
+                k = f.parent / "privkey.pem"
+                if k.exists():
+                    data["cert_fullchain_path"] = str(f)
+                    data["cert_key_path"] = str(k)
                     state.save(data)
-                    return str(cert), str(key)
-
-        # 3. Last try: any .crt/.key in SSHAUTO_CERT_DIR
-        if SSHAUTO_CERT_DIR.exists():
-            for cert in SSHAUTO_CERT_DIR.glob("*.crt"):
-                key = cert.with_suffix(".key")
-                if key.exists():
-                    data["cert_fullchain_path"] = str(cert)
-                    data["cert_key_path"] = str(key)
-                    state.save(data)
-                    return str(cert), str(key)
-
+                    return str(f), str(k)
         return None, None
