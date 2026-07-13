@@ -3,23 +3,24 @@ from pathlib import Path
 from features.base import BaseFeature
 from core.shell import Shell
 from core.logger import log
-from core.config import state, PROXY_PORT_DEFAULT, SCRIPT_PROXY_PATH, SCRIPT_SERVICE_NAME
+from core.config import state, PROXY_PORT_DEFAULT
+
+# Script‑compatible paths
+PROXY_BIN = Path("/usr/local/bin/ws_ssh_proxy.py")
+SERVICE_NAME = "ws-ssh-proxy.service"
 
 class PythonProxyFeature(BaseFeature):
     name = "python_proxy"
     depends_on = ["packages"]
 
     def is_installed(self) -> bool:
-        return SCRIPT_PROXY_PATH.exists() and \
-               Shell.run(f"systemctl is-active {SCRIPT_SERVICE_NAME}", check=False).ok
+        return PROXY_BIN.exists() and Shell.run(f"systemctl is-active {SERVICE_NAME}", check=False).ok
 
     def install(self) -> None:
-        log.info("Installing/Updating Python Proxy service (script‑compatible)…")
-        
         data = state.ensure_defaults()
         proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
         dropbear_port = data.get("dropbear_port", 110)
-        
+
         # Exactly the proxy code from 4th.py
         proxy_code = f'''#!/usr/bin/env python3
 import asyncio
@@ -102,17 +103,16 @@ async def main():
 if __name__ == '__main__':
     asyncio.run(main())
 '''
-        SCRIPT_PROXY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        SCRIPT_PROXY_PATH.write_text(proxy_code)
-        SCRIPT_PROXY_PATH.chmod(0o755)
+        PROXY_BIN.write_text(proxy_code)
+        PROXY_BIN.chmod(0o755)
 
         # Systemd service – identical to script
-        service_content = f"""[Unit]
+        service = f"""[Unit]
 Description=Forced-Upgrade TCP Proxy to SSH (Low Latency)
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 {SCRIPT_PROXY_PATH}
+ExecStart=/usr/bin/python3 {PROXY_BIN}
 Restart=always
 User=root
 StandardOutput=append:/var/log/sshauto/proxy.log
@@ -121,21 +121,20 @@ StandardError=append:/var/log/sshauto/proxy.log
 [Install]
 WantedBy=multi-user.target
 """
-        service_path = Path("/etc/systemd/system") / SCRIPT_SERVICE_NAME
-        service_path.write_text(service_content)
+        Path(f"/etc/systemd/system/{SERVICE_NAME}").write_text(service)
 
         Shell.run("systemctl daemon-reload")
-        Shell.run(f"systemctl enable {SCRIPT_SERVICE_NAME}")
-        Shell.run(f"systemctl restart {SCRIPT_SERVICE_NAME}")
-        
+        Shell.run(f"systemctl enable {SERVICE_NAME}")
+        Shell.run(f"systemctl restart {SERVICE_NAME}")
+
         if not self.is_installed():
-            raise Exception("Critical Failure: Python Proxy failed to start.")
-        log.success("Python Proxy installed and verified (script‑compatible).")
+            raise Exception("Proxy failed to start.")
+        log.success("Python Proxy installed (script‑compatible).")
 
     def remove(self) -> None:
-        Shell.run(f"systemctl stop {SCRIPT_SERVICE_NAME}", check=False)
-        Shell.run(f"systemctl disable {SCRIPT_SERVICE_NAME}", check=False)
-        Path(f"/etc/systemd/system/{SCRIPT_SERVICE_NAME}").unlink(missing_ok=True)
-        SCRIPT_PROXY_PATH.unlink(missing_ok=True)
+        Shell.run(f"systemctl stop {SERVICE_NAME}", check=False)
+        Shell.run(f"systemctl disable {SERVICE_NAME}", check=False)
+        Path(f"/etc/systemd/system/{SERVICE_NAME}").unlink(missing_ok=True)
+        PROXY_BIN.unlink(missing_ok=True)
         Shell.run("systemctl daemon-reload", check=False)
         log.info("Python Proxy removed")
