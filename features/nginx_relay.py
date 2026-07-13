@@ -29,7 +29,7 @@ TEMPLATES_DIR = APP_ROOT / "templates"
 class NginxRelayFeature(BaseFeature):
     name = "nginx_relay"
     description = "Generate the nginx websocket relay (HTTP+HTTPS -> dropbear)"
-    depends_on = ["packages", "dropbear_service", "python_proxy"]
+    depends_on = ["packages", "dropbear_service", "python_proxy"]   # <-- ADDED python_proxy
 
     @property
     def available_path(self) -> Path:
@@ -76,7 +76,7 @@ class NginxRelayFeature(BaseFeature):
     def _render(self) -> str:
         data = state.ensure_defaults()
         dropbear_port = data.get("dropbear_port", DROPBEAR_PORT_DEFAULT)
-        proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
+        proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)      # <-- ADDED
         http_ports = sorted(HTTP_PORTS | set(data.get("custom_http_ports", [])))
         https_ports = sorted(HTTPS_PORTS | set(data.get("custom_https_ports", [])))
 
@@ -92,7 +92,7 @@ class NginxRelayFeature(BaseFeature):
                 .replace("@HTTPS_LISTEN_BLOCK@", https_listen_block)
                 .replace("@CERT_PATH@", cert_path)
                 .replace("@KEY_PATH@", key_path)
-                .replace("@PROXY_PORT@", str(proxy_port))
+                .replace("@PROXY_PORT@", str(proxy_port))          # <-- CHANGED
             )
         else:
             log.warning("no certificate configured yet — HTTPS relay ports "
@@ -105,7 +105,7 @@ class NginxRelayFeature(BaseFeature):
         return (
             base_tpl_path.read_text()
             .replace("@HTTP_LISTEN_BLOCK@", http_listen_block)
-            .replace("@PROXY_PORT@", str(proxy_port))
+            .replace("@PROXY_PORT@", str(proxy_port))              # <-- CHANGED
             .replace("@HTTPS_SERVER_BLOCK@", https_server_block)
         )
 
