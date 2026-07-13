@@ -1,6 +1,3 @@
-# ---- TLS relay -------------------------------------------------
-# TLS terminated here, then plain HTTP forwarded to the Python proxy.
-# The proxy upgrades the connection independently.
 server {
 @HTTPS_LISTEN_BLOCK@
     server_name _;
@@ -28,6 +25,5 @@ server {
         proxy_read_timeout 86400s;
         proxy_send_timeout 86400s;
         proxy_connect_timeout 10s;
-        tcp_nodelay on;
     }
 }
