@@ -18,6 +18,7 @@ map $http_upgrade $connection_upgrade {
 server {
 @HTTP_LISTEN_BLOCK@
     server_name _;
+    tcp_nodelay on;
 
     location / {
         proxy_pass http://127.0.0.1:@PROXY_PORT@;
@@ -33,6 +34,7 @@ server {
         proxy_request_buffering off;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
+        tcp_nodelay on;
     }
 }
 
