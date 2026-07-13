@@ -92,8 +92,8 @@ async def main():
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+            ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
+            ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
         except:
             pass
 
