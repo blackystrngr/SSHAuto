@@ -1,118 +1,140 @@
 import os
+from pathlib import Path
 from features.base import BaseFeature
 from core.shell import Shell
 from core.logger import log
+from core.config import state, PROXY_PORT_DEFAULT
 
 class PythonProxyFeature(BaseFeature):
     name = "python_proxy"
-    description = "Python Asyncio WebSocket Proxy for Dropbear SSH"
     depends_on = ["packages"]
 
     def is_installed(self) -> bool:
-        return os.path.exists("/opt/sshauto/ws_proxy.py") and \
+        return Path("/opt/sshauto/ws_proxy.py").exists() and \
                Shell.run("systemctl is-active sshauto-proxy", check=False).ok
 
     def install(self) -> None:
         log.info("Installing/Updating Python Proxy service...")
         
-        # Embedded safe asynchronous proxy daemon script
-        script_content = r'''import asyncio
-import sys
+        data = state.ensure_defaults()
+        proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
+        dropbear_port = data.get("dropbear_port", 110)
+        
+        # Generate proxy script with DeepSeek optimizations
+        proxy_code = f'''#!/usr/bin/env python3
+import asyncio
+import socket
 
-# Configuration
 BACKEND_IP = "127.0.0.1"
-BACKEND_PORT = 113
-LISTEN_PORT = 8000
+BACKEND_PORT = {dropbear_port}
+LISTEN_PORT = {proxy_port}
 
-async def pipe(reader, writer):
+async def force_upgrade_and_bridge(reader, writer):
+    # TCP_NODELAY on client socket (disable Nagle)
+    sock = writer.get_extra_info('socket')
+    if sock is not None:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+    # Read and discard HTTP headers (safe, no pushback)
+    while True:
+        line = await reader.readline()
+        if not line or line == b'\\r\\n':
+            break
+
+    # Send forced 101 Switching Protocols
+    writer.write(b'HTTP/1.1 101 Switching Protocols\\r\\n')
+    writer.write(b'Upgrade: websocket\\r\\n')
+    writer.write(b'Connection: Upgrade\\r\\n')
+    writer.write(b'\\r\\n')
+    await writer.drain()
+
+    # Connect to local Dropbear
     try:
-        while True:
-            data = await reader.read(4096)
-            if not data:
-                break
-            writer.write(data)
-            await writer.drain()
+        ssh_reader, ssh_writer = await asyncio.open_connection(BACKEND_IP, BACKEND_PORT)
     except Exception:
-        pass
-    finally:
+        writer.close()
+        return
+
+    # TCP_NODELAY on SSH socket
+    ssh_sock = ssh_writer.get_extra_info('socket')
+    if ssh_sock is not None:
+        ssh_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+    async def client_to_ssh():
         try:
+            while True:
+                data = await reader.read(4096)
+                if not data:
+                    break
+                ssh_writer.write(data)
+                await ssh_writer.drain()
+        except Exception:
+            pass
+        finally:
+            ssh_writer.close()
+
+    async def ssh_to_client():
+        try:
+            while True:
+                data = await ssh_reader.read(4096)
+                if not data:
+                    break
+                writer.write(data)
+                await writer.drain()
+        except Exception:
+            pass
+        finally:
             writer.close()
-            await writer.wait_closed()
-        except Exception:
-            pass
 
-async def handle(client_reader, client_writer):
-    try:
-        header = b""
-        while b"\r\n\r\n" not in header:
-            chunk = await client_reader.read(1024)
-            if not chunk:
-                return
-            header += chunk
-        
-        # Extract any trailing SSH handshake bytes swallowed during header loop
-        idx = header.find(b"\r\n\r\n")
-        trailing = header[idx+4:]
-        
-        # Respond to WebSocket upgrading handshake request
-        client_writer.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
-        await client_writer.drain()
-        
-        # Establish link to back-end target daemon
-        try:
-            d_reader, d_writer = await asyncio.open_connection(BACKEND_IP, BACKEND_PORT)
-        except Exception:
-            return
-
-        # Instantly stream the preserved handshake bytes onward
-        if trailing:
-            d_writer.write(trailing)
-            await d_writer.drain()
-
-        # Begin full bi-directional traffic relaying
-        await asyncio.gather(
-            pipe(client_reader, d_writer),
-            pipe(d_reader, client_writer),
-            return_exceptions=True
-        )
-    except Exception:
-        pass
-    finally:
-        try:
-            client_writer.close()
-            await client_writer.wait_closed()
-        except Exception:
-            pass
+    await asyncio.gather(client_to_ssh(), ssh_to_client())
 
 async def main():
-    server = await asyncio.start_server(handle, "127.0.0.1", LISTEN_PORT)
+    server = await asyncio.start_server(
+        force_upgrade_and_bridge, '127.0.0.1', LISTEN_PORT,
+        backlog=128,
+        reuse_address=True,
+    )
+    # Apply low‑latency socket options to the listening socket
+    for s in server.sockets:
+        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+        except:
+            pass
+
     async with server:
         await server.serve_forever()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     asyncio.run(main())
 '''
-        with open("/opt/sshauto/ws_proxy.py", "w") as f:
-            f.write(script_content.strip() + "\n")
+        proxy_path = Path("/opt/sshauto/ws_proxy.py")
+        proxy_path.parent.mkdir(parents=True, exist_ok=True)
+        proxy_path.write_text(proxy_code)
+        proxy_path.chmod(0o755)
 
-        # Deploy Systemd Configuration 
-        service_path = "/etc/systemd/system/sshauto-proxy.service"
-        with open(service_path, "w") as f:
-            f.write("""[Unit]
-Description=SSHAuto WebSocket Proxy
+        # Create systemd service
+        service_path = Path("/etc/systemd/system/sshauto-proxy.service")
+        service_content = f"""[Unit]
+Description=SSHAuto WebSocket Proxy (Low‑Latency)
 After=network.target
 
 [Service]
 ExecStart=/usr/bin/python3 /opt/sshauto/ws_proxy.py
 Restart=always
 User=root
+StandardOutput=append:/var/log/sshauto/proxy.log
+StandardError=append:/var/log/sshauto/proxy.log
 
 [Install]
 WantedBy=multi-user.target
-""")
+"""
+        service_path.write_text(service_content)
 
         Shell.run("systemctl daemon-reload")
-        Shell.run("systemctl enable --now sshauto-proxy")
+        Shell.run("systemctl enable sshauto-proxy")
         Shell.run("systemctl restart sshauto-proxy")
         
         if not self.is_installed():
@@ -121,7 +143,8 @@ WantedBy=multi-user.target
 
     def remove(self) -> None:
         Shell.run("systemctl stop sshauto-proxy", check=False)
-        Shell.run("rm -f /etc/systemd/system/sshauto-proxy.service", check=False)
-        Shell.run("rm -f /opt/sshauto/ws_proxy.py", check=False)
+        Shell.run("systemctl disable sshauto-proxy", check=False)
+        Path("/etc/systemd/system/sshauto-proxy.service").unlink(missing_ok=True)
+        Path("/opt/sshauto/ws_proxy.py").unlink(missing_ok=True)
         Shell.run("systemctl daemon-reload", check=False)
         log.info("Python Proxy removed")
