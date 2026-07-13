@@ -1,137 +1,102 @@
-import os
-import json
-import urllib.request
-import urllib.error
+"""
+Automated non-interactive ACME Account allocation and generation layer.
+"""
+from __future__ import annotations
+
+import datetime
 from pathlib import Path
-from core.shell import Shell
+from core.config import LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR, state
+from core.exceptions import CertificateError
 from core.logger import log
-from core.config import state
+from core.shell import Shell
 from features.base import BaseFeature
+
+
+class CertStrategy:
+    def issue(self, domain: str) -> tuple[str, str]:
+        raise NotImplementedError
+
+
+class SelfSignedStrategy(CertStrategy):
+    def issue(self, domain: str) -> tuple[str, str]:
+        out_dir = SSHAUTO_CERT_DIR / domain
+        out_dir.mkdir(parents=True, exist_ok=True)
+        cert_path = out_dir / "fullchain.pem"
+        key_path = out_dir / "privkey.pem"
+        log.info(f"Generating immediate self-signed fallback cert for {domain}")
+        Shell.run(
+            "openssl req -x509 -nodes -days 825 -newkey rsa:2048 "
+            f"-keyout {key_path} -out {cert_path} -subj '/CN={domain}'"
+        )
+        return str(cert_path), str(key_path)
+
+
+class AcmeStrategy(CertStrategy):
+    def issue(self, domain: str) -> tuple[str, str]:
+        Shell.require("certbot", package_hint="certbot")
+        log.info(f"Deploying Certbot pipeline for domain: {domain}")
+        
+        # Shut down Nginx momentarily to free up port 80 for the standalone challenge loop
+        Shell.run("systemctl stop nginx", check=False)
+        try:
+            Shell.run(
+                f"certbot certonly --standalone --non-interactive --agree-tos "
+                f"--register-unsafely-without-email -d {domain}",
+                timeout=180
+            )
+        except Exception as exc:
+            raise CertificateError(f"ACME validation transaction dropped: {exc}")
+        finally:
+            Shell.run("systemctl start nginx", check=False)
+
+        live_dir = LETSENCRYPT_LIVE / domain
+        return str(live_dir / "fullchain.pem"), str(live_dir / "privkey.pem")
+
 
 class CertificatesFeature(BaseFeature):
     name = "certificates"
-    description = "Direct Cloudflare Origin CA Certificate Provisioner"
+    description = "Manage automation keys and ACME cryptographic assets"
     depends_on = ["packages"]
-    
-    # Keeps the 30-second background loop from constantly prompting for input
-    idempotent = False 
+    idempotent = False
 
     def is_installed(self) -> bool:
-        return state.get("cert_strategy") == "cloudflare_origin" and \
-               os.path.exists("/var/lib/sshauto/certs/server.crt")
-
-    def _generate_cloudflare_origin_cert(self, domain: str):
-        print("\n" + "="*60)
-        print(" CLOUDFLARE ORIGIN CA DIRECT PROVISIONER ".center(60))
-        print("="*60)
-        log.info("This will fetch a 15-year trusted Origin Certificate directly from Cloudflare.")
-        log.warning("Ensure your Cloudflare proxy (Orange Cloud) is ENABLED for this domain.\n")
-
-        email = input("Cloudflare Account Email: ").strip()
-        api_key = input("Cloudflare Global API Key: ").strip()
-
-        if not email or not api_key:
-            raise Exception("Both Email and Global API Key are strictly required.")
-
-        # 1. Define paths matching the convention layout
-        cert_dir = Path("/var/lib/sshauto/certs")
-        cert_dir.mkdir(parents=True, exist_ok=True)
-        
-        key_path = cert_dir / "server.key"
-        crt_path = cert_dir / "server.crt"
-        csr_path = Path("/tmp/sshauto_cf.csr")
-
-        # 2. Generate local private key and CSR via standard OpenSSL
-        log.info("Generating local Private Key and Certificate Signing Request (CSR)...")
-        Shell.run(f"rm -f {key_path} {crt_path} {csr_path}", check=False)
-        
-        Shell.run(f"openssl genrsa -out {key_path} 2048", check=True)
-        Shell.run(f"openssl req -new -key {key_path} -out {csr_path} -subj '/CN={domain}'", check=True)
-        
-        csr_content = csr_path.read_text()
-
-        # 3. Payload configuration for the Cloudflare v4 Certificate endpoint
-        url = "https://api.cloudflare.com/client/v4/certificates"
-        headers = {
-            "X-Auth-Email": email,
-            "X-Auth-Key": api_key,
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "hostnames": [domain, f"*.{domain}"],
-            "requested_validity": 5475,  # 15 Years (Maximum permissible by Cloudflare)
-            "request_type": "origin-rsa",
-            "csr": csr_content
-        }
-
-        log.info("Transmitting CSR directly to Cloudflare API...")
-        req = urllib.request.Request(
-            url, 
-            data=json.dumps(payload).encode("utf-8"), 
-            headers=headers, 
-            method="POST"
-        )
-
-        try:
-            with urllib.request.urlopen(req, timeout=30) as response:
-                res_data = json.loads(response.read().decode("utf-8"))
-                
-                if res_data.get("success"):
-                    cert_content = res_data["result"]["certificate"]
-                    crt_path.write_text(cert_content.strip() + "\n")
-                    
-                    # Lock down file permissions for security
-                    os.chmod(key_path, 0o600)
-                    os.chmod(crt_path, 0o644)
-                    
-                    state.set("cert_strategy", "cloudflare_origin")
-                    state.set("cert_domain", domain)
-                    log.success(f"15-Year Cloudflare Certificate successfully generated for {domain}")
-                else:
-                    errors = res_data.get("errors", [])
-                    raise Exception(f"Cloudflare API rejected request: {errors}")
-                    
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8", errors="ignore")
-            try:
-                parsed_err = json.loads(err_body)
-                err_msg = parsed_err.get("errors", [{}])[0].get("message", err_body)
-            except Exception:
-                err_msg = err_body
-            raise Exception(f"Cloudflare API Connection Failed ({e.code}): {err_msg}")
-        except Exception as e:
-            raise Exception(f"Failed to communicate with Cloudflare: {e}")
-        finally:
-            if csr_path.exists():
-                csr_path.unlink()
+        data = state.load()
+        cert = data.get("cert_fullchain_path")
+        key = data.get("cert_key_path")
+        return bool(cert and key and Path(cert).exists() and Path(key).exists())
 
     def install(self) -> None:
-        print("\n" + "="*50)
-        print(" CERTIFICATE MANAGEMENT ".center(50))
-        print("="*50)
-        print("1. Provision Direct Cloudflare Origin CA Certificate (15 Years)")
-        print("0. Cancel / Skip")
-        print("-" * 50)
+        data = state.ensure_defaults()
+        domain = data.get("cert_domain")
 
-        choice = input("Select option: ").strip()
-        if choice != "1":
-            log.warning("Certificate generation skipped.")
-            return
-
-        domain = input("\nEnter your domain/subdomain (e.g., node1.yourdomain.com): ").strip()
         if not domain:
-            log.error("Domain cannot be empty.")
-            return
+            print()
+            log.rule("Unattended ACME Configuration")
+            domain = input("Target Domain name for this server: ").strip()
+            if not domain:
+                raise CertificateError("Domain mapping field cannot be empty.")
+            state.set("cert_domain", domain)
 
-        self._generate_cloudflare_origin_cert(domain)
+        # Default automatically to our automated Let's Encrypt engine strategy
+        strategy = AcmeStrategy()
+        try:
+            cert_path, key_path = strategy.issue(domain)
+        except Exception:
+            log.warning("ACME failed. Swapping instantly to self-signed strategy configuration.")
+            strategy = SelfSignedStrategy()
+            cert_path, key_path = strategy.issue(domain)
 
-        # Signal web infrastructure to reload configuration mapping instantly
-        if Shell.run("systemctl is-active nginx", check=False).ok:
-            log.info("Reloading Nginx to apply new Origin Certificate...")
-            Shell.run("systemctl reload nginx", check=False)
+        data.update({
+            "cert_domain": domain,
+            "cert_fullchain_path": cert_path,
+            "cert_key_path": key_path,
+            "cert_issued_at": datetime.datetime.utcnow().isoformat(),
+        })
+        state.save(data)
+
+        # Triggers structural rewrite inside the newly updated Nginx component block
+        from features.nginx_relay import NginxRelayFeature
+        NginxRelayFeature().regenerate()
 
     def remove(self) -> None:
-        Shell.run("rm -f /var/lib/sshauto/certs/server.crt /var/lib/sshauto/certs/server.key", check=False)
-        state.set("cert_strategy", None)
-        state.set("cert_domain", None)
-        log.info("Cloudflare certificates securely deleted from state.")
+        pass
