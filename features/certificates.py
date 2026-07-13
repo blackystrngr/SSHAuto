@@ -55,7 +55,7 @@ class CertificatesFeature(BaseFeature):
         headers = {
             "X-Auth-Email": email,
             "X-Auth-Key": api_key,
-            "Content-Type": application/json"
+            "Content-Type": "application/json"
         }
         payload = {
             "hostnames": [domain, f"*.{domain}"],
