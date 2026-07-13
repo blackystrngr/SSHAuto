@@ -20,31 +20,20 @@ class FeatureStatus:
     detail: str = ""
 
 
-class BaseFeature(ABC):
-    #: unique short id, e.g. "nginx_relay"
-    name: str = "unnamed"
-    #: one-line human description shown in the CLI/dashboard
+class BaseFeature:
+    name: str = ""
     description: str = ""
-    #: names of other features that must install() before this one
-    depends_on: list[str] = field(default_factory=list)
-    #: safe to auto re-run install() repeatedly (needed for auto-update)
+    depends_on: list[str] = []
     idempotent: bool = True
 
-    def __repr__(self):
-        return f"<Feature {self.name}>"
-
-    # ---- contract every subclass must implement ----------------------
-    @abstractmethod
     def is_installed(self) -> bool:
-        """Cheap check: has this feature already been applied?"""
+        raise NotImplementedError
 
-    @abstractmethod
     def install(self) -> None:
-        """Apply the feature. Must be safe to call again (idempotent)."""
+        raise NotImplementedError
 
-    @abstractmethod
     def remove(self) -> None:
-        """Undo the feature as cleanly as possible."""
+        raise NotImplementedError
 
     # ---- optional overrides -------------------------------------------
     def status(self) -> FeatureStatus:
