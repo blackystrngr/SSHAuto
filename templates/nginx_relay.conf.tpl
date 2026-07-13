@@ -1,10 +1,10 @@
 # ============================================================
-#  Managed by sshauto – exact copy of working standalone config
+#  Managed by sshauto – identical to standalone script
 # ============================================================
 
 server {
 @HTTP_LISTEN_BLOCK@
-    server_name _;
+    server_name @DOMAIN@;
     tcp_nodelay on;
 
     client_header_timeout 86400s;
@@ -16,7 +16,6 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
 
-        # low‑latency proxy settings
         proxy_buffering off;
         proxy_request_buffering off;
         proxy_read_timeout 86400s;
