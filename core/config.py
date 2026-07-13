@@ -138,7 +138,7 @@ class StateStore:
         return {
             "ssh_port": SSH_PORT_DEFAULT,
             "dropbear_port": DROPBEAR_PORT_DEFAULT,
-            "proxy_port": PROXY_PORT_DEFAULT,
+            "proxy_port": PROXY_PORT_DEFAULT,    # <-- NEW
             "custom_http_ports": [],
             "custom_https_ports": [],
             "cert_strategy": None,
