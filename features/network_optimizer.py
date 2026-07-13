@@ -11,87 +11,85 @@ SYSTEMD_SYSTEM_CONF = Path("/etc/systemd/system.conf.d/99-sshauto-limits.conf")
 
 class NetworkOptimizerFeature(BaseFeature):
     name = "network_optimizer"
-    description = "Apply kernel network stack optimizations, BBR, and connection handling structures (3x-ui profile)"
+    description = "Apply ultra low-latency network tweaks and BBR profiling (3x-ui style)"
     depends_on = ["packages"]
     idempotent = True  #
 
     def is_installed(self) -> bool:
-        # Check if setup configuration tracks exist and BBR algorithm module is active
         if not SYSCTL_CONF.exists() or not LIMITS_CONF.exists():
             return False
         bbr_active = Shell.run("sysctl net.ipv4.tcp_congestion_control", capture_output=True, check=False)
         return "bbr" in bbr_active.lower()
 
     def install(self) -> None:
-        log.info("Optimizing kernel network stack and scaling process constraints...")
+        log.info("Applying absolute low-latency network profiles...")
 
         # ------------------------------------------------------------------
-        # STEP 1: KERNEL & CONGESTION TUNING (3x-ui Spec)
+        # HIGH-RESPONSE NETWORK TUNING MATRIX
         # ------------------------------------------------------------------
-        sysctl_content = """# 3x-ui Style Tunnel Optimizations managed by SSHAuto
-# Enable Google BBR congestion control algorithm for low-latency under packet loss
+        sysctl_content = """# 3x-ui Core + Extreme Low Latency Profile managed by SSHAuto
+# Enable Google BBR for low latency under network stress
 net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=bbr
 
-# Expand concurrent incoming request queues (prevents connection dropouts)
+# EXTREME REACTION TIME TWEAKS
+# 1. Do not clear congestion window size after connection goes idle (Immediate reaction)
+net.ipv4.tcp_slow_start_after_idle=0
+# 2. Minimize unsent socket data buffers to explicitly combat bufferbloat
+net.ipv4.tcp_notsent_lowat=16384
+# 3. Disable automatic packet corking (Flush small packets immediately)
+net.ipv4.tcp_autocorking=0
+# 4. Instruct kernel to aggressively prioritize processing speed over power/bulk throughput
+net.ipv4.tcp_low_latency=1
+
+# Expand incoming request queues to avoid micro-drops
 net.core.somaxconn=65535
 net.core.netdev_max_backlog=65535
 net.ipv4.tcp_max_syn_backlog=65535
 
-# Maximize socket read/write memory allocations (larger network windows)
+# Maximize socket read/write memory windows
 net.core.rmem_max=67108864
 net.core.wmem_max=67108864
 net.ipv4.tcp_rmem=4096 87380 67108864
 net.ipv4.tcp_wmem=4096 65536 67108864
 
-# Allow fast recycling of sockets to avoid TIME_WAIT execution locks
+# Fast reuse of sockets to prevent port allocation lockouts
 net.ipv4.tcp_tw_reuse=1
 net.ipv4.tcp_fin_timeout=15
-
-# Enable TCP Fast Open (speeds up handshakes on supported clients)
 net.ipv4.tcp_fastopen=3
 
-# Global system file descriptor allocation baseline limit
+# Global descriptor constraints
 fs.file-max=2097152
 """
         SYSCTL_CONF.parent.mkdir(parents=True, exist_ok=True)
         SYSCTL_CONF.write_text(sysctl_content)
         
-        # Ensure the BBR kernel module is forcibly loaded into runtime space
         Shell.run("modprobe tcp_bbr", check=False)
-        
-        # Reload sysctl using strictly our isolated config (safe against system errors)
         Shell.run(f"sysctl -p {SYSCTL_CONF}", check=True)
-        log.success("Kernel parameters and BBR congestion tracking successfully engaged.")
+        log.success("Extreme speed network profiles active in the running kernel core.")
 
         # ------------------------------------------------------------------
-        # STEP 2: PAM OPEN FILE DESCRIPTOR OVERRIDES (High Concurrency)
+        # PROCESS & SYSTEMD MAX DESCRIPTORS
         # ------------------------------------------------------------------
-        limits_content = """# Elevate limits to prevent proxy connections from triggering 'Too many open files'
-* soft nofile 1048576
+        limits_content = """* soft nofile 1048576
 * hard nofile 1048576
 root soft nofile 1048576
 root hard nofile 1048576
 """
         LIMITS_CONF.parent.mkdir(parents=True, exist_ok=True)
         LIMITS_CONF.write_text(limits_content)
-        log.success("Process limits architecture configuration profiles registered.")
 
-        # ------------------------------------------------------------------
-        # STEP 3: SYSTEMD GLOBAL DAEMON INHERITANCE LIMITS
-        # ------------------------------------------------------------------
         systemd_content = """[Manager]
 DefaultLimitNOFILE=1048576
 """
         SYSTEMD_SYSTEM_CONF.parent.mkdir(parents=True, exist_ok=True)
         SYSTEMD_SYSTEM_CONF.write_text(systemd_content)
         
-        # Force systemd manager instance to safely hot-reload internal configs
         Shell.run("systemctl daemon-reexec", check=False)
-        log.success("Global systemd process managers re-executed cleanly with updated limits.")
+        log.success("Concurrency caps scaled successfully.")
 
     def remove(self) -> None:
-        log.info("Removing optimization layers and restoring system defaults...")
+        log.info("Restoring stock distribution network values...")
         if SYSCTL_CONF.exists():
             SYSCTL_CONF.unlink()
         if LIMITS_CONF.exists():
@@ -99,8 +97,8 @@ DefaultLimitNOFILE=1048576
         if SYSTEMD_SYSTEM_CONF.exists():
             SYSTEMD_SYSTEM_CONF.unlink()
             
-        # Safely reset kernel runtime values back to standard standard Linux baselines
         Shell.run("sysctl -w net.core.default_qdisc=pfifo_fast", check=False)
         Shell.run("sysctl -w net.ipv4.tcp_congestion_control=cubic", check=False)
+        Shell.run("sysctl -w net.ipv4.tcp_slow_start_after_idle=1", check=False)
         Shell.run("systemctl daemon-reexec", check=False)
-        log.success("Network optimizations rolled back cleanly to system defaults.")
+        log.success("Network profile returned to standard operating defaults.")
