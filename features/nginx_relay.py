@@ -39,6 +39,15 @@ CERT_SEARCH_PATHS = [
     Path("/etc/ssl/certs"),
 ]
 
+# Common certificate filename pairs to look for (cert, key)
+CERT_PAIRS = [
+    ("fullchain.pem", "privkey.pem"),
+    ("cert.pem", "key.pem"),
+    ("server.crt", "server.key"),
+    ("domain.crt", "domain.key"),
+    ("fullchain.crt", "privkey.key"),
+]
+
 
 class NginxRelayFeature(BaseFeature):
     name = "nginx_relay"
@@ -67,7 +76,7 @@ class NginxRelayFeature(BaseFeature):
         if not self.enabled_path.exists():
             Shell.run(f"ln -sf {self.available_path} {self.enabled_path}")
 
-        Shell.run("nginx -t")  # validate before touching the live service
+        Shell.run("nginx -t")
         Shell.run("systemctl enable nginx", check=False)
         Shell.run("systemctl reload nginx || systemctl restart nginx")
         log.success(f"nginx relay written to {self.available_path} and reloaded")
@@ -77,7 +86,6 @@ class NginxRelayFeature(BaseFeature):
         Shell.run("systemctl reload nginx", check=False)
 
     def regenerate(self):
-        """Called by the dashboard after ports/cert change."""
         self.install()
 
     # -- rendering ------------------------------------------------------
@@ -130,7 +138,7 @@ class NginxRelayFeature(BaseFeature):
         Resolve certificate and key paths.
         Tries:
         1. Paths stored in state.
-        2. Auto‑discover from domain using multiple standard locations.
+        2. Auto‑discover from domain using multiple standard locations and common filename pairs.
         If found, updates state and returns paths.
         """
         # 1. Check state
@@ -150,21 +158,23 @@ class NginxRelayFeature(BaseFeature):
                 # Try exact domain subdirectory
                 domain_dir = base_dir / domain
                 if domain_dir.exists():
-                    cert = domain_dir / "fullchain.pem"
-                    key = domain_dir / "privkey.pem"
-                    if cert.exists() and key.exists():
-                        log.info(f"Auto‑discovered certificate in {domain_dir}")
-                        data["cert_fullchain_path"] = str(cert)
-                        data["cert_key_path"] = str(key)
-                        state.save(data)
-                        return str(cert), str(key)
+                    for cert_name, key_name in CERT_PAIRS:
+                        cert = domain_dir / cert_name
+                        key = domain_dir / key_name
+                        if cert.exists() and key.exists():
+                            log.info(f"Auto‑discovered certificate pair in {domain_dir}")
+                            data["cert_fullchain_path"] = str(cert)
+                            data["cert_key_path"] = str(key)
+                            state.save(data)
+                            return str(cert), str(key)
 
-                # For /etc/ssl/certs, files may be named <domain>.pem or <domain>.crt
+                # For /etc/ssl/certs, files may be named <domain>.crt or <domain>.pem
                 if base_dir == Path("/etc/ssl/certs"):
-                    for f in base_dir.glob(f"{domain}*.pem"):
-                        if f.is_file():
+                    for f in base_dir.glob(f"{domain}.*"):
+                        if f.is_file() and f.suffix in (".crt", ".pem"):
                             # Try to find corresponding key in /etc/ssl/private/
-                            key_candidate = Path("/etc/ssl/private") / f"{f.stem}.key"
+                            key_name = f.stem + ".key"
+                            key_candidate = Path("/etc/ssl/private") / key_name
                             if key_candidate.exists():
                                 log.info(f"Auto‑discovered certificate: {f} and key: {key_candidate}")
                                 data["cert_fullchain_path"] = str(f)
@@ -172,15 +182,37 @@ class NginxRelayFeature(BaseFeature):
                                 state.save(data)
                                 return str(f), str(key_candidate)
 
-        # 3. Last resort: look for any fullchain.pem + privkey.pem in common dirs (without domain)
+        # 3. Last resort: look for any common certificate pairs in the base directories
         for base_dir in CERT_SEARCH_PATHS:
             if not base_dir.exists():
                 continue
-            for cert in base_dir.glob("*/fullchain.pem"):
-                key = cert.parent / "privkey.pem"
+            for cert_name, key_name in CERT_PAIRS:
+                cert = base_dir / cert_name
+                key = base_dir / key_name
+                if cert.exists() and key.exists():
+                    log.info(f"Found certificate pair: {cert} and {key}")
+                    # Try to extract domain from parent directory name
+                    domain = cert.parent.name if cert.parent.name != "certs" else None
+                    data["cert_domain"] = domain or "unknown"
+                    data["cert_fullchain_path"] = str(cert)
+                    data["cert_key_path"] = str(key)
+                    state.save(data)
+                    return str(cert), str(key)
+
+        # 4. If still nothing, try to find any .crt + .key in SSHAUTO_CERT_DIR (where server.crt/server.key lives)
+        if SSHAUTO_CERT_DIR.exists():
+            for cert in SSHAUTO_CERT_DIR.glob("*.crt"):
+                key = cert.with_suffix(".key")
                 if key.exists():
-                    log.info(f"Found certificate pair in {cert.parent} (domain unknown)")
-                    data["cert_domain"] = cert.parent.name  # Store the domain
+                    log.info(f"Found certificate pair: {cert} and {key}")
+                    data["cert_fullchain_path"] = str(cert)
+                    data["cert_key_path"] = str(key)
+                    state.save(data)
+                    return str(cert), str(key)
+            for cert in SSHAUTO_CERT_DIR.glob("*.pem"):
+                key = cert.with_suffix(".key")
+                if key.exists():
+                    log.info(f"Found certificate pair: {cert} and {key}")
                     data["cert_fullchain_path"] = str(cert)
                     data["cert_key_path"] = str(key)
                     state.save(data)
