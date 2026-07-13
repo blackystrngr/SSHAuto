@@ -37,7 +37,7 @@ PIP_PACKAGES = []
 # ----------------------------------------------------------------------
 NGINX_SITES_AVAILABLE = Path("/etc/nginx/sites-available")
 NGINX_SITES_ENABLED = Path("/etc/nginx/sites-enabled")
-NGINX_RELAY_NAME = "sshauto-relay"
+NGINX_RELAY_NAME = "sshauto-relay"   # not used now; we use "ssh_tunnel" in nginx_relay.py
 
 SSHD_CONFIG = Path("/etc/ssh/sshd_config")
 SSH_BANNER_PATH = Path("/etc/ssh/sshd_banner")
