@@ -41,7 +41,7 @@ class DropbearServiceFeature(BaseFeature):
         DROPBEAR_DEFAULTS_FILE.write_text(config)
         log.info(f"Dropbear defaults written (port {port})")
 
-        # 2. Create a systemd drop‑in override
+        # 2. Create systemd drop‑in override
         service_name = self._detect_dropbear_service()
         if service_name:
             which = Shell.run("which dropbear", check=False)
@@ -73,7 +73,7 @@ ExecStart={dropbear_bin} -EF -p 127.0.0.1:{port} -W 65536 -b {DROPBEAR_BANNER_PA
             Shell.run("pkill dropbear", check=False)
             Shell.run(f"dropbear -p 127.0.0.1:{port} -W 65536 -b {DROPBEAR_BANNER_PATH} -E", check=False)
 
-        # 3. Verify binding (more permissive check)
+        # 3. Verify binding (more permissive)
         self._verify_binding(port)
 
     def remove(self) -> None:
@@ -102,18 +102,12 @@ ExecStart={dropbear_bin} -EF -p 127.0.0.1:{port} -W 65536 -b {DROPBEAR_BANNER_PA
         return None
 
     def _verify_binding(self, expected_port: int) -> None:
-        # Use ss first
         result = Shell.run(f"ss -lpn | grep ':{expected_port}' | grep dropbear", check=False)
         if result.ok:
             log.success(f"Dropbear confirmed listening on 127.0.0.1:{expected_port}")
             return
-
-        # Fallback to netstat
         result = Shell.run(f"netstat -tulpn | grep ':{expected_port}' | grep dropbear", check=False)
         if result.ok:
             log.success(f"Dropbear confirmed listening on 127.0.0.1:{expected_port} (netstat)")
             return
-
-        # If still not found, maybe the process is running but the grep pattern failed; log debug only
-        log.debug(f"Dropbear binding check did not find a matching line, but service may still be running. "
-                  f"Check manually with 'ss -lpn | grep dropbear'")
+        log.debug("Dropbear binding check did not find a matching line, but service may still be running.")
