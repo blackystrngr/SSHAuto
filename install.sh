@@ -35,7 +35,18 @@ else
     git clone --branch "${BRANCH}" --depth 1 "${REPO_URL}" "${APP_ROOT}"
 fi
 
-chmod +x "${APP_ROOT}/main.py" "${APP_ROOT}/scripts/"*.py
+# Ensure executable permissions are cleanly applied across scripts
+chmod +x "${APP_ROOT}/main.py"
+if [[ -d "${APP_ROOT}/scripts" ]]; then
+    chmod +x "${APP_ROOT}/scripts/"*.py 2>/dev/null || true
+fi
+
+c_cyan "==> Installing Python dependencies from requirements.txt"
+if [[ -f "${APP_ROOT}/requirements.txt" ]]; then
+    pip3 install --break-system-packages --upgrade -r "${APP_ROOT}/requirements.txt"
+else
+    c_red "Warning: requirements.txt not found in ${APP_ROOT}"
+fi
 
 c_cyan "==> Running the automated installer"
 python3 "${APP_ROOT}/main.py" install
