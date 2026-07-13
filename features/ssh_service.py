@@ -1,8 +1,5 @@
 """
-Configures the *real* OpenSSH daemon (direct access on its own port —
-separate from dropbear, which is the one relayed through nginx/websocket).
-Picks a random banner from data/banners.txt at install time and applies
-a few sane hardening defaults without locking the operator out.
+Configures the real OpenSSH daemon with speed‑optimised ciphers.
 """
 from __future__ import annotations
 
@@ -18,6 +15,7 @@ from features.base import BaseFeature
 
 BANNERS_FILE = APP_ROOT / "data" / "banners.txt"
 
+# Speed‑optimised cipher, MAC, and KEX settings
 HARDENING_DIRECTIVES = {
     "PermitRootLogin": "prohibit-password",
     "PasswordAuthentication": "yes",   # dropbear/relay users still need password auth
@@ -26,12 +24,16 @@ HARDENING_DIRECTIVES = {
     "ClientAliveCountMax": "3",
     "MaxAuthTries": "4",
     "LoginGraceTime": "20",
+    # --- Speed optimisations ---
+    "Ciphers": "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes256-gcm@openssh.com",
+    "MACs": "umac-128-etm@openssh.com",
+    "KexAlgorithms": "curve25519-sha256@libssh.org,ecdh-sha2-nistp256",
 }
 
 
 class SSHServiceFeature(BaseFeature):
     name = "ssh_service"
-    description = "Configure OpenSSH: port, banner, hardening"
+    description = "Configure OpenSSH: port, banner, hardening + fast ciphers"
     depends_on = ["packages"]
 
     def is_installed(self) -> bool:
@@ -53,9 +55,9 @@ class SSHServiceFeature(BaseFeature):
         directives["Banner"] = str(SSH_BANNER_PATH)
 
         self._apply_directives(directives)
-        Shell.run("sshd -t")  # validate config before touching the live service
+        Shell.run("sshd -t")  # validate config
         Shell.run("systemctl restart ssh || systemctl restart sshd")
-        log.success(f"sshd listening on port {port} with new banner")
+        log.success(f"sshd listening on port {port} with fast ciphers")
 
     def remove(self) -> None:
         log.warning("ssh_service.remove() only strips our directives, "
