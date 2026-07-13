@@ -21,7 +21,7 @@ class DropbearServiceFeature(BaseFeature):
         DROPBEAR_BANNER_PATH.write_text("Authorized Tunnel Access Only.\n")
         config = f"""NO_START=0
 DROPBEAR_PORT={port}
-DROPBEAR_EXTRA_ARGS="-p 127.0.0.1:{port} -b {DROPBEAR_BANNER_PATH} -W 65536"
+DROPBEAR_EXTRA_ARGS="-p 127.0.0.1:{port} -b {DROPBEAR_BANNER_PATH} -W 65536 -c chacha20-poly1305@openssh.com,aes128-gcm@openssh.com -m umac-128-etm@openssh.com"
 DROPBEAR_BANNER="{DROPBEAR_BANNER_PATH}"
 DROPBEAR_RECEIVE_WINDOW=65536
 """
