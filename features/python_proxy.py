@@ -20,7 +20,7 @@ class PythonProxyFeature(BaseFeature):
         proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
         dropbear_port = data.get("dropbear_port", 110)
         
-        # Exact proxy code from the standalone script
+        # EXACT proxy code from the working standalone script (4th.py)
         proxy_code = f'''#!/usr/bin/env python3
 import asyncio
 import socket
@@ -112,7 +112,7 @@ if __name__ == '__main__':
         proxy_path.write_text(proxy_code)
         proxy_path.chmod(0o755)
 
-        service_path = Path("/etc/systemd/system/sshauto-proxy.service")
+        # Systemd service (matches script)
         service_content = f"""[Unit]
 Description=Forced-Upgrade TCP Proxy to SSH (Low Latency)
 After=network.target
@@ -127,6 +127,7 @@ StandardError=append:/var/log/sshauto/proxy.log
 [Install]
 WantedBy=multi-user.target
 """
+        service_path = Path("/etc/systemd/system/sshauto-proxy.service")
         service_path.write_text(service_content)
 
         Shell.run("systemctl daemon-reload")
