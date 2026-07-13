@@ -10,15 +10,13 @@ class DropbearServiceFeature(BaseFeature):
     depends_on = ["packages"]
 
     def is_installed(self) -> bool:
-        # Check if our custom unit exists and is enabled
-        service_path = Path("/etc/systemd/system/sshauto-dropbear.service")
-        return service_path.exists() and Shell.run("systemctl is-enabled sshauto-dropbear", check=False).ok
+        return DROPBEAR_DEFAULTS_FILE.exists() and "NO_START=0" in DROPBEAR_DEFAULTS_FILE.read_text()
 
     def install(self) -> None:
         data = state.ensure_defaults()
         port = data.get("dropbear_port", DROPBEAR_PORT_DEFAULT)
 
-        # Write /etc/default/dropbear (for compatibility)
+        # Write banner and defaults
         DROPBEAR_BANNER_PATH.write_text("Authorized Tunnel Access Only.\n")
         config = f"""NO_START=0
 DROPBEAR_PORT={port}
@@ -29,58 +27,41 @@ DROPBEAR_RECEIVE_WINDOW=65536
         DROPBEAR_DEFAULTS_FILE.write_text(config)
         log.info(f"Dropbear defaults written (port {port})")
 
-        # Determine dropbear binary path
-        which = Shell.run("which dropbear", check=False)
-        dropbear_bin = which.stdout.strip() if which.ok else "/usr/sbin/dropbear"
+        # Kill any existing dropbear processes
+        Shell.run("pkill -f dropbear", check=False)
+        time.sleep(1)
 
-        # Write custom systemd unit
+        # Create a simple systemd service that starts dropbear directly
         service_content = f"""[Unit]
-Description=SSHAuto Dropbear Tunnel Backend
+Description=Dropbear SSH Tunnel Backend
 After=network.target
 
 [Service]
-ExecStart={dropbear_bin} -EF -p 127.0.0.1:{port} -b {DROPBEAR_BANNER_PATH} -W 65536
+ExecStart=/usr/sbin/dropbear -F -p 127.0.0.1:{port} -W 65536 -b {DROPBEAR_BANNER_PATH}
 Restart=always
-RestartSec=5
+RestartSec=3
 User=root
 
 [Install]
 WantedBy=multi-user.target
 """
-        service_path = Path("/etc/systemd/system/sshauto-dropbear.service")
+        service_path = Path("/etc/systemd/system/dropbear-tunnel.service")
         service_path.write_text(service_content)
+        log.info("Created systemd unit: dropbear-tunnel.service")
 
-        # Disable any existing dropbear service to avoid conflict
-        for old in ("dropbear", "dropbear.service"):
-            if Shell.run(f"systemctl is-enabled {old}", check=False).ok:
-                Shell.run(f"systemctl disable {old}", check=False)
-                Shell.run(f"systemctl stop {old}", check=False)
+        # Enable and start – with timeout
+        Shell.run("systemctl daemon-reload", timeout=10)
+        Shell.run("systemctl enable dropbear-tunnel", check=False, timeout=10)
+        Shell.run("systemctl restart dropbear-tunnel", check=False, timeout=10)
 
-        # Enable and start our custom unit
-        Shell.run("systemctl daemon-reload")
-        Shell.run("systemctl enable sshauto-dropbear")
-        Shell.run("systemctl restart sshauto-dropbear")
-
-        # Verify
-        if not Shell.run("systemctl is-active sshauto-dropbear", check=False).ok:
-            log.warning("Dropbear service failed to start; falling back to direct start.")
-            Shell.run("pkill dropbear", check=False)
-            # Run in background (using nohup)
-            Shell.run(f"nohup {dropbear_bin} -p 127.0.0.1:{port} -W 65536 -b {DROPBEAR_BANNER_PATH} -E > /dev/null 2>&1 &", check=False)
-        else:
-            log.success(f"Dropbear started via custom systemd unit on port {port}.")
-
+        # Verify binding
         self._verify_binding(port)
 
     def remove(self) -> None:
-        service_path = Path("/etc/systemd/system/sshauto-dropbear.service")
-        if service_path.exists():
-            Shell.run("systemctl stop sshauto-dropbear", check=False)
-            Shell.run("systemctl disable sshauto-dropbear", check=False)
-            service_path.unlink()
-            Shell.run("systemctl daemon-reload", check=False)
-        else:
-            Shell.run("pkill dropbear", check=False)
+        Shell.run("systemctl stop dropbear-tunnel", check=False, timeout=10)
+        Shell.run("systemctl disable dropbear-tunnel", check=False, timeout=10)
+        Path("/etc/systemd/system/dropbear-tunnel.service").unlink(missing_ok=True)
+        Shell.run("systemctl daemon-reload", timeout=10)
         log.info("Dropbear removed")
 
     def _verify_binding(self, expected_port: int) -> None:
@@ -90,4 +71,4 @@ WantedBy=multi-user.target
                 log.success(f"Dropbear confirmed listening on 127.0.0.1:{expected_port}")
                 return
             time.sleep(1)
-        log.warning(f"Could not verify Dropbear binding on port {expected_port}. Check with 'ss -lpn | grep dropbear'")
+        log.warning(f"Could not verify Dropbear binding on port {expected_port}.")
