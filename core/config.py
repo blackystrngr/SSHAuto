@@ -25,6 +25,9 @@ PROXY_PORT_DEFAULT = 8000             # Python asyncio proxy (new relay)
 PIP_PACKAGES = ["uvloop>=0.19.0"]
 USER_GROUP = "sshauto-users"
 
+# Automation & polling timelines
+GIT_POLL_INTERVAL_SECONDS = 30        # 30-second automated check interval
+
 # ----------------------------------------------------------------------
 # Filesystem paths (all as specified / conventional Debian-family paths)
 # ----------------------------------------------------------------------
@@ -39,6 +42,10 @@ DROPBEAR_DEFAULTS_FILE = Path("/etc/default/dropbear")
 APP_ROOT = Path("/opt/sshauto")
 SSHAUTO_CERT_DIR = Path("/var/lib/sshauto/certs")
 LETSENCRYPT_LIVE = Path("/etc/letsencrypt/live")
+
+# System tracking & runtime directories
+LOG_DIR = Path("/var/log/sshauto")
+SYSTEMD_DIR = Path("/etc/systemd/system")
 
 
 class StateStore:
