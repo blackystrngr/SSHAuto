@@ -7,7 +7,7 @@ from core.logger import log
 
 class PythonProxyFeature(BaseFeature):
     name = "python_proxy"
-    description = "Universal Auto-Detecting WebSocket Proxy with SSH Hardening"
+    description = "High-Performance Raw Stream WebSocket Proxy with SSH Hardening"
     depends_on = ["packages"]
 
     def is_installed(self) -> bool:
@@ -41,7 +41,7 @@ class PythonProxyFeature(BaseFeature):
         # 1. Enforce Server High-Concurrency Tuning
         self._harden_ssh_server()
         
-        # 2. Write out the robust Auto-Detecting Proxy core
+        # 2. Write out the robust pure-stream Proxy core
         script_content = r'''
 import asyncio
 import hashlib
@@ -52,7 +52,7 @@ from pathlib import Path
 # Runtime Path References aligned with config.py
 STATE_PATH = Path("/var/lib/sshauto/state.json")
 BACKEND_IP = "127.0.0.1"
-DROPBEAR_PORT_DEFAULT = 113  # Sourced directly from system configuration defaults
+DROPBEAR_PORT_DEFAULT = 113
 LISTEN_PORT = 8000
 
 def get_live_dropbear_port():
@@ -64,6 +64,24 @@ def get_live_dropbear_port():
     except Exception:
         pass
     return DROPBEAR_PORT_DEFAULT
+
+async def pipe(reader, writer):
+    """Bridges data bidirectionally between raw TCP streams efficiently."""
+    try:
+        while True:
+            data = await reader.read(16384)
+            if not data:
+                break
+            writer.write(data)
+            await writer.drain()
+    except Exception:
+        pass
+    finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except:
+            pass
 
 async def handle(client_reader, client_writer):
     backend_writer = None
@@ -79,11 +97,11 @@ async def handle(client_reader, client_writer):
         if not header_data or b"\r\n\r\n" not in header_data:
             return
 
-        # 2. Separate trailing data from headers to prevent handshake losses
+        # 2. Extract trailing bytes (swallowed SSH handshake payload) before clearing headers
         idx = header_data.find(b"\r\n\r\n")
         trailing = header_data[idx+4:]
 
-        # 3. Parse Sec-WebSocket-Key for standards compliance
+        # 3. Parse Sec-WebSocket-Key for standard compliance
         ws_key = None
         lines = header_data[:idx].decode("utf-8", errors="ignore").split("\r\n")
         for line in lines:
@@ -108,132 +126,24 @@ async def handle(client_reader, client_writer):
                 "Connection: Upgrade\r\n\r\n"
             ).encode()
 
+        # 4. Acknowledge handshake back to client
         client_writer.write(response)
         await client_writer.drain()
 
-        # 4. Open Backend Connection to Dropbear
+        # 5. Connect downstream directly to Dropbear
         backend_port = get_live_dropbear_port()
         backend_reader, backend_writer = await asyncio.open_connection(BACKEND_IP, backend_port)
 
-        # 5. Populate trailing buffer if initial read didn't lock any bytes
-        if not trailing:
-            try:
-                chunk = await client_reader.read(4096)
-                if not chunk:
-                    return
-                trailing = chunk
-            except Exception:
-                return
+        # 6. Immediately push any swallowed trailing client bytes (SSH init string) to Dropbear
+        if trailing:
+            backend_writer.write(trailing)
+            await backend_writer.drain()
 
-        # 6. Auto-Detect Mode: Standard WS Frames vs Raw Direct Custom Injections
-        is_ws_framed = len(trailing) > 0 and trailing[0] in (0x81, 0x82)
-
-        if not is_ws_framed:
-            # MODE A: Raw Payloads (Direct / HTTP Custom injects)
-            if trailing:
-                backend_writer.write(trailing)
-                await backend_writer.drain()
-
-            async def pipe_raw(reader, writer):
-                while True:
-                    data = await reader.read(16384)
-                    if not data:
-                        break
-                    writer.write(data)
-                    await writer.drain()
-
-            await asyncio.gather(
-                pipe_raw(client_reader, backend_writer),
-                pipe_raw(backend_reader, client_writer)
-            )
-        else:
-            # MODE B: Compliant WS Framing (CDN Tunnels / Strict Frameworks)
-            async def client_to_backend_ws(reader, writer, initial_buf):
-                buffer = initial_buf
-                while True:
-                    while len(buffer) < 2:
-                        chunk = await reader.read(16384)
-                        if not chunk:
-                            break
-                        buffer += chunk
-                    if len(buffer) < 2:
-                        break
-
-                    b1, b2 = buffer[0], buffer[1]
-                    masked = b2 & 0x80
-                    payload_len = b2 & 0x7F
-                    header_len = 2
-
-                    if payload_len == 126:
-                        while len(buffer) < header_len + 2:
-                            chunk = await reader.read(16384)
-                            if not chunk:
-                                break
-                            buffer += chunk
-                        if len(buffer) < header_len + 2:
-                            break
-                        payload_len = int.from_bytes(buffer[header_len:header_len+2], 'big')
-                        header_len += 2
-                    elif payload_len == 127:
-                        while len(buffer) < header_len + 8:
-                            chunk = await reader.read(16384)
-                            if not chunk:
-                                break
-                            buffer += chunk
-                        if len(buffer) < header_len + 8:
-                            break
-                        payload_len = int.from_bytes(buffer[header_len:header_len+8], 'big')
-                        header_len += 8
-
-                    if masked:
-                        while len(buffer) < header_len + 4:
-                            chunk = await reader.read(16384)
-                            if not chunk:
-                                break
-                            buffer += chunk
-                        if len(buffer) < header_len + 4:
-                            break
-                        mask_key = buffer[header_len:header_len+4]
-                        header_len += 4
-
-                    while len(buffer) < header_len + payload_len:
-                        chunk = await reader.read(16384)
-                        if not chunk:
-                            break
-                        buffer += chunk
-                    if len(buffer) < header_len + payload_len:
-                        break
-
-                    payload = buffer[header_len:header_len+payload_len]
-                    buffer = buffer[header_len+payload_len:]
-
-                    if masked:
-                        payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
-
-                    if payload:
-                        writer.write(payload)
-                        await writer.drain()
-
-            async def backend_to_client_ws(reader, writer):
-                while True:
-                    data = await reader.read(16384)
-                    if not data:
-                        break
-                    b1 = 0x80 | 0x02  # Mark as FIN + Binary Frame Type
-                    p_len = len(data)
-                    if p_len <= 125:
-                        header = bytes([b1, p_len])
-                    elif p_len <= 65535:
-                        header = bytes([b1, 126]) + p_len.to_bytes(2, 'big')
-                    else:
-                        header = bytes([b1, 127]) + p_len.to_bytes(8, 'big')
-                    writer.write(header + data)
-                    await writer.drain()
-
-            await asyncio.gather(
-                client_to_backend_ws(client_reader, backend_writer, trailing),
-                backend_to_client_ws(backend_reader, client_writer)
-            )
+        # 7. Execute clean raw bi-directional tunnel streaming
+        await asyncio.gather(
+            pipe(client_reader, backend_writer),
+            pipe(backend_reader, client_writer)
+        )
 
     except Exception:
         pass
@@ -249,6 +159,15 @@ async def handle(client_reader, client_writer):
                 await backend_writer.wait_closed()
             except:
                 pass
+
+async def main():
+    # Listen globally on 0.0.0.0 to allow direct external connections
+    server = await asyncio.start_server(handle, "0.0.0.0", LISTEN_PORT)
+    async with server:
+        await server.serve_forever()
+
+if __name__ == "__main__":
+    asyncio.run(main())
 '''
         os.makedirs("/opt/sshauto", exist_ok=True)
         with open("/opt/sshauto/ws_proxy.py", "w") as f:
