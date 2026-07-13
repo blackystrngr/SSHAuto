@@ -27,6 +27,13 @@ USER_GROUP = "sshauto-users"
 GIT_POLL_INTERVAL_SECONDS = 30        # 30-second automated check interval
 
 # ----------------------------------------------------------------------
+# Package Management Requirements
+# ----------------------------------------------------------------------
+REQUIRED_PACKAGES = ["nginx", "dropbear", "fail2ban", "iptables", "curl", "git"]
+REMOVE_PACKAGES = ["apache2"]          # Prevents port 80 binding conflicts
+PIP_PACKAGES = []                     # Handled directly via requirements.txt
+
+# ----------------------------------------------------------------------
 # Filesystem paths (all as specified / conventional Debian-family paths)
 # ----------------------------------------------------------------------
 NGINX_SITES_AVAILABLE = Path("/etc/nginx/sites-available")
