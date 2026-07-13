@@ -1,5 +1,5 @@
 """
-Python asyncio websocket-to-TCP proxy.
+Python asyncio websocket-to-TCP proxy with full framing.
 Listens on 127.0.0.1:<proxy_port>, handles WebSocket upgrade,
 then forwards WebSocket payloads to dropbear and frames responses back.
 """
@@ -141,12 +141,12 @@ def encode_frame(opcode, payload, mask=False):
     header = bytearray()
     header.append(b1)
     if payload_len <= 125:
-        header.append(0x80 if mask else 0x00 | payload_len)
+        header.append((0x80 if mask else 0x00) | payload_len)
     elif payload_len <= 65535:
-        header.append(0x80 if mask else 0x00 | 126)
+        header.append((0x80 if mask else 0x00) | 126)
         header.extend(struct.pack(">H", payload_len))
     else:
-        header.append(0x80 if mask else 0x00 | 127)
+        header.append((0x80 if mask else 0x00) | 127)
         header.extend(struct.pack(">Q", payload_len))
     if mask:
         mask_key = b'\\x00\\x01\\x02\\x03'  # dummy, not actually used for server->client
