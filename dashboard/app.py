@@ -1,3 +1,7 @@
+"""
+The interactive dashboard, launched by typing `kk` at the shell (see
+scripts/install_kk.sh for how that alias gets wired up).
+"""
 from __future__ import annotations
 
 from core.config import state
@@ -7,8 +11,6 @@ from dashboard import ui
 from dashboard.monitor import Monitor
 from dashboard.ports import PortManager
 from dashboard.users import UserManager
-# Import the new feature
-from features.multiplexing import MultiplexingFeature
 
 
 class Dashboard:
@@ -16,7 +18,6 @@ class Dashboard:
         self.users = UserManager()
         self.ports = PortManager()
         self.monitor = Monitor()
-        self.multiplex = MultiplexingFeature()
 
     def run(self):
         while True:
@@ -35,11 +36,7 @@ class Dashboard:
         if stats:
             ui.kv_row("Active tunnels", str(stats.active_connections))
             ui.kv_row("Total accounts", str(stats.total_users))
-            ui.kv_row("Throughput", f"↓ {stats.rx_kbps} kbps    ↑ {stats.tx_kbps} kbps")
-        
-        # Check status for the menu label
-        mux_status = "ON" if self.multiplex.is_installed() else "OFF"
-        
+            ui.kv_row("Throughput", f"↓ {stats.rx_kbps} kbps   ↑ {stats.tx_kbps} kbps")
         print()
         ui.menu([
             ("1", "Create SSH/websocket user"),
@@ -52,7 +49,6 @@ class Dashboard:
             ("8", "Show active ports"),
             ("9", "Server status (services)"),
             ("10", "Network Optimizer & BBR Menu"),
-            ("11", f"Toggle Multiplexing [{mux_status}]"),
             ("0", "Exit"),
         ])
 
@@ -68,7 +64,6 @@ class Dashboard:
             "8": self._show_ports,
             "9": self._service_status,
             "10": self._manage_network_optimizer,
-            "11": self._toggle_multiplexing,
         }
         action = actions.get(choice)
         if not action:
@@ -156,16 +151,6 @@ class Dashboard:
         from core.plugin_manager import PluginManager
         PluginManager().status_all()
 
-    def _toggle_multiplexing(self):
-        ui.clear()
-        ui.header("multiplexing settings")
-        if self.multiplex.is_installed():
-            log.info("Disabling Multiplexing...")
-            self.multiplex.remove()
-        else:
-            log.info("Enabling Multiplexing...")
-            self.multiplex.install()
-
     def _manage_network_optimizer(self):
         """Interactive dashboard screen mirroring 3x-ui optimization controls."""
         try:
@@ -187,6 +172,7 @@ class Dashboard:
             
             ui.kv_row("Current Profile Status", f"{status_color}{status_text}\033[0m")
             
+            # FIXED: Removed capture_output=True
             from core.shell import Shell
             cc_res = Shell.run("sysctl net.ipv4.tcp_congestion_control", check=False)
             ss_res = Shell.run("sysctl net.ipv4.tcp_slow_start_after_idle", check=False)
@@ -231,7 +217,7 @@ class Dashboard:
     def _safe_live_stats(self):
         try:
             return self.monitor.live_stats(sample_seconds=0.3)
-        except Exception:
+        except Exception:  # noqa: BLE001 - the home screen must never crash
             return None
 
 

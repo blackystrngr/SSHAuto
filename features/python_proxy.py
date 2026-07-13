@@ -21,7 +21,7 @@ import sys
 
 # Configuration
 BACKEND_IP = "127.0.0.1"
-BACKEND_PORT = 113  # FIX 1: Changed from 110 to 113 (Dropbear default)
+BACKEND_PORT = 110 
 LISTEN_PORT = 8000
 
 async def pipe(reader, writer):
@@ -43,21 +43,12 @@ async def handle(client_reader, client_writer):
             if not chunk: return
             header += chunk
         
-        # FIX 2: Rescue the SSH handshake bytes swallowed during the header read
-        idx = header.find(b"\r\n\r\n")
-        trailing = header[idx+4:]
-        
         client_writer.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
         await client_writer.drain()
         
         try:
             d_reader, d_writer = await asyncio.open_connection(BACKEND_IP, BACKEND_PORT)
         except Exception: return
-
-        # FIX 2 (Continued): Immediately push rescued SSH bytes to Dropbear
-        if trailing:
-            d_writer.write(trailing)
-            await d_writer.drain()
 
         await asyncio.gather(pipe(client_reader, d_writer), pipe(d_reader, client_writer))
     except Exception: pass
@@ -72,7 +63,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 '''
         with open("/opt/sshauto/ws_proxy.py", "w") as f:
-            f.write(script_content.strip() + "\n")
+            f.write(script_content)
 
         # Create systemd service
         service_path = "/etc/systemd/system/sshauto-proxy.service"
@@ -92,7 +83,6 @@ WantedBy=multi-user.target
 
         Shell.run("systemctl daemon-reload")
         Shell.run("systemctl enable --now sshauto-proxy")
-        Shell.run("systemctl restart sshauto-proxy")
         
         # STRICT ENFORCEMENT
         if not self.is_installed():
@@ -101,7 +91,5 @@ WantedBy=multi-user.target
 
     def remove(self) -> None:
         Shell.run("systemctl stop sshauto-proxy", check=False)
-        Shell.run("rm -f /etc/systemd/system/sshauto-proxy.service", check=False)
-        Shell.run("rm -f /opt/sshauto/ws_proxy.py", check=False)
-        Shell.run("systemctl daemon-reload", check=False)
+        Shell.run("rm /etc/systemd/system/sshauto-proxy.service", check=False)
         log.info("Python Proxy removed")
