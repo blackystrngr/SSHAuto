@@ -1,6 +1,6 @@
 """
 Manages runtime port lists via state storage and hooks updates directly
-into the newly restructured Nginx relay and Firewall components.
+into the Nginx relay and Firewall components.
 """
 from __future__ import annotations
 
@@ -8,16 +8,17 @@ from core.config import HTTP_PORTS, HTTPS_PORTS, state
 from core.exceptions import ValidationError
 from core.logger import log
 
+
 class PortManager:
     def add(self, port: int, kind: str) -> None:
         self._validate(port, kind)
         data = state.ensure_defaults()
         key = "custom_http_ports" if kind == "http" else "custom_https_ports"
         ports = set(data.get(key, []))
-
+        
         if port in ports or port in (HTTP_PORTS if kind == "http" else HTTPS_PORTS):
             raise ValidationError(f"Port {port} is already actively assigned.")
-
+            
         ports.add(port)
         data[key] = sorted(ports)
         state.save(data)
@@ -28,10 +29,10 @@ class PortManager:
         data = state.ensure_defaults()
         key = "custom_http_ports" if kind == "http" else "custom_https_ports"
         ports = set(data.get(key, []))
-
+        
         if port not in ports:
             raise ValidationError(f"{port} is not a custom active port.")
-
+            
         ports.discard(port)
         data[key] = sorted(ports)
         state.save(data)
@@ -56,6 +57,7 @@ class PortManager:
         try:
             from features.nginx_relay import NginxRelayFeature
             from features.firewall import FirewallFeature
+            
             log.info("Re-applying updated port matrices into system configurations...")
             NginxRelayFeature().install()
             FirewallFeature().install()
