@@ -21,8 +21,6 @@ SSH_PORT_DEFAULT = 22                 # real OpenSSH, direct access
 DROPBEAR_PORT_DEFAULT = 113           # dropbear tunnel backend
 PROXY_PORT_DEFAULT = 8000             # Python asyncio proxy (new relay)
 
-# Production core requirements
-PIP_PACKAGES = ["uvloop>=0.19.0"]
 USER_GROUP = "sshauto-users"
 
 # Automation & polling timelines
@@ -46,6 +44,10 @@ LETSENCRYPT_LIVE = Path("/etc/letsencrypt/live")
 # System tracking & runtime directories
 LOG_DIR = Path("/var/log/sshauto")
 SYSTEMD_DIR = Path("/etc/systemd/system")
+
+# Fail2ban service layouts
+FAIL2BAN_FILTER_DIR = Path("/etc/fail2ban/filter.d")
+FAIL2BAN_JAIL_LOCAL = Path("/etc/fail2ban/jail.local")
 
 
 class StateStore:
