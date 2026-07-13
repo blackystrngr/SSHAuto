@@ -21,8 +21,6 @@ SSH_PORT_DEFAULT = 22                 # real OpenSSH, direct access
 DROPBEAR_PORT_DEFAULT = 143           # dropbear, bound to 127.0.0.1 only,
                                        # reached exclusively through the
                                        # nginx websocket relay above.
-PROXY_PORT_DEFAULT = 8000             # Python asyncio proxy (new relay)
-
 
 # ----------------------------------------------------------------------
 # Filesystem paths (all as specified / conventional Debian-family paths)
@@ -138,7 +136,6 @@ class StateStore:
         return {
             "ssh_port": SSH_PORT_DEFAULT,
             "dropbear_port": DROPBEAR_PORT_DEFAULT,
-            "proxy_port": PROXY_PORT_DEFAULT,    # <-- NEW
             "custom_http_ports": [],
             "custom_https_ports": [],
             "cert_strategy": None,
