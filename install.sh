@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # sshauto bootstrap installer.
 # Usage on a fresh Debian/Ubuntu VPS:
-#   curl -fsSL https://raw.githubusercontent.com/<you>/sshauto/main/install.sh | sudo bash
+# curl -fsSL https://raw.githubusercontent.com/blackystrngr/SSHAuto/main/install.sh | sudo bash
+
 set -euo pipefail
 
-REPO_URL="${SSHAUTO_REPO_URL:-https://github.com/blackystrngr/sshauto.git}"
+REPO_URL="${SSHAUTO_REPO_URL:-https://github.com/blackystrngr/SSHAuto.git}"
 BRANCH="${SSHAUTO_BRANCH:-main}"
 APP_ROOT="/opt/sshauto"
 
-c_red()   { printf '\033[31m%s\033[0m\n' "$1"; }
+c_red() { printf '\033[31m%s\033[0m\n' "$1"; }
 c_green() { printf '\033[32m%s\033[0m\n' "$1"; }
-c_cyan()  { printf '\033[36m%s\033[0m\n' "$1"; }
+c_cyan() { printf '\033[36m%s\033[0m\n' "$1"; }
 
 if [[ $EUID -ne 0 ]]; then
     c_red "This installer must run as root (try: sudo bash install.sh)"
@@ -35,18 +36,10 @@ else
     git clone --branch "${BRANCH}" --depth 1 "${REPO_URL}" "${APP_ROOT}"
 fi
 
-# Ensure executable permissions are cleanly applied across scripts
-chmod +x "${APP_ROOT}/main.py"
-if [[ -d "${APP_ROOT}/scripts" ]]; then
-    chmod +x "${APP_ROOT}/scripts/"*.py 2>/dev/null || true
-fi
+chmod +x "${APP_ROOT}/main.py" "${APP_ROOT}/scripts/"*.py
 
 c_cyan "==> Installing Python dependencies from requirements.txt"
-if [[ -f "${APP_ROOT}/requirements.txt" ]]; then
-    pip3 install --break-system-packages --upgrade -r "${APP_ROOT}/requirements.txt"
-else
-    c_red "Warning: requirements.txt not found in ${APP_ROOT}"
-fi
+pip3 install --break-system-packages --upgrade -r "${APP_ROOT}/requirements.txt"
 
 c_cyan "==> Running the automated installer"
 python3 "${APP_ROOT}/main.py" install
