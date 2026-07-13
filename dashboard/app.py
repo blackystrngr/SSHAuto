@@ -157,27 +157,28 @@ class Dashboard:
             from features.network_optimizer import NetworkOptimizerFeature
             optimizer = NetworkOptimizerFeature()
         except ImportError:
+            from core.logger import log
             log.error("NetworkOptimizerFeature module not found at features/network_optimizer.py")
             return
 
         while True:
+            from dashboard import ui
             ui.clear()
             ui.header("network acceleration hub", "optimize routing latency & bbr layers")
             
-            # Read real-time engine runtime installation status
             is_active = optimizer.is_installed()
             status_text = "ENABLED & OPTIMIZED" if is_active else "DISABLED (STOCK LINUX)"
             status_color = "\033[1;32m" if is_active else "\033[1;31m"
             
             ui.kv_row("Current Profile Status", f"{status_color}{status_text}\033[0m")
             
-            # Print current live core configuration parameters
+            # FIXED: Removed capture_output=True
             from core.shell import Shell
-            cc_res = Shell.run("sysctl net.ipv4.tcp_congestion_control", capture_output=True, check=False)
-            ss_res = Shell.run("sysctl net.ipv4.tcp_slow_start_after_idle", capture_output=True, check=False)
+            cc_res = Shell.run("sysctl net.ipv4.tcp_congestion_control", check=False)
+            ss_res = Shell.run("sysctl net.ipv4.tcp_slow_start_after_idle", check=False)
             
-            cc = cc_res.stdout.strip() if cc_res else "Unknown"
-            ss = ss_res.stdout.strip() if ss_res else "Unknown"
+            cc = cc_res.stdout.strip() if cc_res.ok else "Unknown"
+            ss = ss_res.stdout.strip() if ss_res.ok else "Unknown"
             
             ui.kv_row("Kernel Alg", cc)
             ui.kv_row("Slow Start Config", ss)
@@ -199,6 +200,7 @@ class Dashboard:
                     optimizer.install()
                     ui.prompt("\nExecution complete. Press Enter to continue...")
                 except Exception as e:
+                    from core.logger import log
                     log.error(f"Error during network tune: {e}")
                     ui.prompt("\nPress Enter to continue...")
             elif action == "2":
@@ -208,9 +210,10 @@ class Dashboard:
                     optimizer.remove()
                     ui.prompt("\nRollback complete. Press Enter to continue...")
                 except Exception as e:
+                    from core.logger import log
                     log.error(f"Error during rollback: {e}")
                     ui.prompt("\nPress Enter to continue...")
-
+                    
     def _safe_live_stats(self):
         try:
             return self.monitor.live_stats(sample_seconds=0.3)
