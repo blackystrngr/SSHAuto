@@ -31,6 +31,14 @@ from features.base import BaseFeature
 
 TEMPLATES_DIR = APP_ROOT / "templates"
 
+# Common locations where SSL certificates might be stored
+CERT_SEARCH_PATHS = [
+    LETSENCRYPT_LIVE,          # /etc/letsencrypt/live/
+    SSHAUTO_CERT_DIR,          # /var/lib/sshauto/certs/
+    Path("/etc/ssl/cloudflare"),
+    Path("/etc/ssl/certs"),
+]
+
 
 class NginxRelayFeature(BaseFeature):
     name = "nginx_relay"
@@ -100,9 +108,11 @@ class NginxRelayFeature(BaseFeature):
                 .replace("@KEY_PATH@", key_path)
                 .replace("@PROXY_PORT@", str(proxy_port))
             )
+            log.info(f"HTTPS block enabled with certificate: {cert_path}")
         else:
-            log.warning("no certificate configured yet — HTTPS relay ports "
-                        "will not be enabled until `sshauto cert` runs")
+            log.warning("No certificate found – HTTPS relay ports will not be enabled. "
+                        "Run 'sshauto cert' or place certificate in one of: "
+                        f"{', '.join(str(p) for p in CERT_SEARCH_PATHS)}")
 
         base_tpl_path = TEMPLATES_DIR / "nginx_relay.conf.tpl"
         if not base_tpl_path.exists():
@@ -119,40 +129,62 @@ class NginxRelayFeature(BaseFeature):
         """
         Resolve certificate and key paths.
         Tries:
-        1. Paths stored in state (cert_fullchain_path / cert_key_path)
-        2. Auto‑discover from domain using Let's Encrypt and self‑signed directories.
+        1. Paths stored in state.
+        2. Auto‑discover from domain using multiple standard locations.
         If found, updates state and returns paths.
         """
-        # 1. Try state paths
+        # 1. Check state
         cert_path = data.get("cert_fullchain_path")
         key_path = data.get("cert_key_path")
         if cert_path and key_path and Path(cert_path).exists() and Path(key_path).exists():
             log.debug(f"Using certificate from state: {cert_path}")
             return cert_path, key_path
 
-        # 2. Auto‑discover based on domain
+        # 2. Auto‑discover using domain
         domain = data.get("cert_domain")
         if domain:
-            # Let's Encrypt
-            le_cert = LETSENCRYPT_LIVE / domain / "fullchain.pem"
-            le_key = LETSENCRYPT_LIVE / domain / "privkey.pem"
-            if le_cert.exists() and le_key.exists():
-                log.info(f"Auto‑discovered Let's Encrypt certificate for {domain}")
-                # Update state
-                data["cert_fullchain_path"] = str(le_cert)
-                data["cert_key_path"] = str(le_key)
-                state.save(data)
-                return str(le_cert), str(le_key)
+            # Search in each base directory
+            for base_dir in CERT_SEARCH_PATHS:
+                if not base_dir.exists():
+                    continue
+                # Try exact domain subdirectory
+                domain_dir = base_dir / domain
+                if domain_dir.exists():
+                    cert = domain_dir / "fullchain.pem"
+                    key = domain_dir / "privkey.pem"
+                    if cert.exists() and key.exists():
+                        log.info(f"Auto‑discovered certificate in {domain_dir}")
+                        data["cert_fullchain_path"] = str(cert)
+                        data["cert_key_path"] = str(key)
+                        state.save(data)
+                        return str(cert), str(key)
 
-            # Self‑signed / custom fallback
-            ss_cert = SSHAUTO_CERT_DIR / domain / "fullchain.pem"
-            ss_key = SSHAUTO_CERT_DIR / domain / "privkey.pem"
-            if ss_cert.exists() and ss_key.exists():
-                log.info(f"Auto‑discovered self‑signed certificate for {domain}")
-                data["cert_fullchain_path"] = str(ss_cert)
-                data["cert_key_path"] = str(ss_key)
-                state.save(data)
-                return str(ss_cert), str(ss_key)
+                # For /etc/ssl/certs, files may be named <domain>.pem or <domain>.crt
+                if base_dir == Path("/etc/ssl/certs"):
+                    for f in base_dir.glob(f"{domain}*.pem"):
+                        if f.is_file():
+                            # Try to find corresponding key in /etc/ssl/private/
+                            key_candidate = Path("/etc/ssl/private") / f"{f.stem}.key"
+                            if key_candidate.exists():
+                                log.info(f"Auto‑discovered certificate: {f} and key: {key_candidate}")
+                                data["cert_fullchain_path"] = str(f)
+                                data["cert_key_path"] = str(key_candidate)
+                                state.save(data)
+                                return str(f), str(key_candidate)
 
-        # No certificate found
+        # 3. Last resort: look for any fullchain.pem + privkey.pem in common dirs (without domain)
+        for base_dir in CERT_SEARCH_PATHS:
+            if not base_dir.exists():
+                continue
+            for cert in base_dir.glob("*/fullchain.pem"):
+                key = cert.parent / "privkey.pem"
+                if key.exists():
+                    log.info(f"Found certificate pair in {cert.parent} (domain unknown)")
+                    data["cert_domain"] = cert.parent.name  # Store the domain
+                    data["cert_fullchain_path"] = str(cert)
+                    data["cert_key_path"] = str(key)
+                    state.save(data)
+                    return str(cert), str(key)
+
+        # Nothing found
         return None, None
