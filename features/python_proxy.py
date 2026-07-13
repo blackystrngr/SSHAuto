@@ -3,24 +3,24 @@ from pathlib import Path
 from features.base import BaseFeature
 from core.shell import Shell
 from core.logger import log
-from core.config import state, PROXY_PORT_DEFAULT
+from core.config import state, PROXY_PORT_DEFAULT, SCRIPT_PROXY_PATH, SCRIPT_SERVICE_NAME
 
 class PythonProxyFeature(BaseFeature):
     name = "python_proxy"
     depends_on = ["packages"]
 
     def is_installed(self) -> bool:
-        return Path("/opt/sshauto/ws_proxy.py").exists() and \
-               Shell.run("systemctl is-active sshauto-proxy", check=False).ok
+        return SCRIPT_PROXY_PATH.exists() and \
+               Shell.run(f"systemctl is-active {SCRIPT_SERVICE_NAME}", check=False).ok
 
     def install(self) -> None:
-        log.info("Installing/Updating Python Proxy service...")
+        log.info("Installing/Updating Python Proxy service (script‑compatible)…")
         
         data = state.ensure_defaults()
         proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
         dropbear_port = data.get("dropbear_port", 110)
         
-        # EXACT proxy code from the working standalone script (4th.py)
+        # Exactly the proxy code from 4th.py
         proxy_code = f'''#!/usr/bin/env python3
 import asyncio
 import socket
@@ -28,32 +28,27 @@ import socket
 DROPBEAR_PORT = {dropbear_port}
 
 async def force_upgrade_and_bridge(reader, writer):
-    # Enable TCP_NODELAY on the client socket
     sock = writer.get_extra_info('socket')
     if sock is not None:
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-    # Read and discard HTTP headers (safe, no pushback)
     while True:
         line = await reader.readline()
         if not line or line == b'\\r\\n':
             break
 
-    # Send forced 101 Switching Protocols
     writer.write(b'HTTP/1.1 101 Switching Protocols\\r\\n')
     writer.write(b'Upgrade: websocket\\r\\n')
     writer.write(b'Connection: Upgrade\\r\\n')
     writer.write(b'\\r\\n')
     await writer.drain()
 
-    # Connect to Dropbear
     try:
         ssh_reader, ssh_writer = await asyncio.open_connection('127.0.0.1', DROPBEAR_PORT)
     except Exception:
         writer.close()
         return
 
-    # TCP_NODELAY on SSH connection
     ssh_sock = ssh_writer.get_extra_info('socket')
     if ssh_sock is not None:
         ssh_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -107,18 +102,17 @@ async def main():
 if __name__ == '__main__':
     asyncio.run(main())
 '''
-        proxy_path = Path("/opt/sshauto/ws_proxy.py")
-        proxy_path.parent.mkdir(parents=True, exist_ok=True)
-        proxy_path.write_text(proxy_code)
-        proxy_path.chmod(0o755)
+        SCRIPT_PROXY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SCRIPT_PROXY_PATH.write_text(proxy_code)
+        SCRIPT_PROXY_PATH.chmod(0o755)
 
-        # Systemd service (matches script)
+        # Systemd service – identical to script
         service_content = f"""[Unit]
 Description=Forced-Upgrade TCP Proxy to SSH (Low Latency)
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /opt/sshauto/ws_proxy.py
+ExecStart=/usr/bin/python3 {SCRIPT_PROXY_PATH}
 Restart=always
 User=root
 StandardOutput=append:/var/log/sshauto/proxy.log
@@ -127,21 +121,21 @@ StandardError=append:/var/log/sshauto/proxy.log
 [Install]
 WantedBy=multi-user.target
 """
-        service_path = Path("/etc/systemd/system/sshauto-proxy.service")
+        service_path = Path("/etc/systemd/system") / SCRIPT_SERVICE_NAME
         service_path.write_text(service_content)
 
         Shell.run("systemctl daemon-reload")
-        Shell.run("systemctl enable sshauto-proxy")
-        Shell.run("systemctl restart sshauto-proxy")
+        Shell.run(f"systemctl enable {SCRIPT_SERVICE_NAME}")
+        Shell.run(f"systemctl restart {SCRIPT_SERVICE_NAME}")
         
         if not self.is_installed():
             raise Exception("Critical Failure: Python Proxy failed to start.")
-        log.success("Python Proxy installed and verified.")
+        log.success("Python Proxy installed and verified (script‑compatible).")
 
     def remove(self) -> None:
-        Shell.run("systemctl stop sshauto-proxy", check=False)
-        Shell.run("systemctl disable sshauto-proxy", check=False)
-        Path("/etc/systemd/system/sshauto-proxy.service").unlink(missing_ok=True)
-        Path("/opt/sshauto/ws_proxy.py").unlink(missing_ok=True)
+        Shell.run(f"systemctl stop {SCRIPT_SERVICE_NAME}", check=False)
+        Shell.run(f"systemctl disable {SCRIPT_SERVICE_NAME}", check=False)
+        Path(f"/etc/systemd/system/{SCRIPT_SERVICE_NAME}").unlink(missing_ok=True)
+        SCRIPT_PROXY_PATH.unlink(missing_ok=True)
         Shell.run("systemctl daemon-reload", check=False)
         log.info("Python Proxy removed")
