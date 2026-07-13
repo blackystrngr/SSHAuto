@@ -20,6 +20,8 @@ from core.config import (
     NGINX_RELAY_NAME,
     NGINX_SITES_AVAILABLE,
     NGINX_SITES_ENABLED,
+    LETSENCRYPT_LIVE,
+    SSHAUTO_CERT_DIR,
     state,
 )
 from core.exceptions import ConfigError
@@ -114,8 +116,43 @@ class NginxRelayFeature(BaseFeature):
         )
 
     def _resolve_cert_paths(self, data: dict) -> tuple[str | None, str | None]:
+        """
+        Resolve certificate and key paths.
+        Tries:
+        1. Paths stored in state (cert_fullchain_path / cert_key_path)
+        2. Auto‑discover from domain using Let's Encrypt and self‑signed directories.
+        If found, updates state and returns paths.
+        """
+        # 1. Try state paths
         cert_path = data.get("cert_fullchain_path")
         key_path = data.get("cert_key_path")
         if cert_path and key_path and Path(cert_path).exists() and Path(key_path).exists():
+            log.debug(f"Using certificate from state: {cert_path}")
             return cert_path, key_path
+
+        # 2. Auto‑discover based on domain
+        domain = data.get("cert_domain")
+        if domain:
+            # Let's Encrypt
+            le_cert = LETSENCRYPT_LIVE / domain / "fullchain.pem"
+            le_key = LETSENCRYPT_LIVE / domain / "privkey.pem"
+            if le_cert.exists() and le_key.exists():
+                log.info(f"Auto‑discovered Let's Encrypt certificate for {domain}")
+                # Update state
+                data["cert_fullchain_path"] = str(le_cert)
+                data["cert_key_path"] = str(le_key)
+                state.save(data)
+                return str(le_cert), str(le_key)
+
+            # Self‑signed / custom fallback
+            ss_cert = SSHAUTO_CERT_DIR / domain / "fullchain.pem"
+            ss_key = SSHAUTO_CERT_DIR / domain / "privkey.pem"
+            if ss_cert.exists() and ss_key.exists():
+                log.info(f"Auto‑discovered self‑signed certificate for {domain}")
+                data["cert_fullchain_path"] = str(ss_cert)
+                data["cert_key_path"] = str(ss_key)
+                state.save(data)
+                return str(ss_cert), str(ss_key)
+
+        # No certificate found
         return None, None
