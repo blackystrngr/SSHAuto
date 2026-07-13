@@ -29,7 +29,6 @@ class PythonProxyFeature(BaseFeature):
 
         APP_ROOT.mkdir(parents=True, exist_ok=True)
 
-        # Build highly optimized runtime proxy asset
         script_content = f"""#!/usr/bin/env python3
 import asyncio
 import socket
@@ -42,10 +41,10 @@ try:
 except ImportError:
     pass
 
-BUFFER_SIZE = 65536  # Synchronized with Dropbear -W receive window boundaries
+BUFFER_SIZE = 65536
 
 def make_ws_frame(data: bytes) -> bytes:
-    b1 = 0x82  # FIN=1, Opcode=2 (Binary Frame Profile)
+    b1 = 0x82
     length = len(data)
     if length < 126:
         header = bytes([b1, length])
@@ -75,7 +74,7 @@ async def read_ws_frame(reader: asyncio.StreamReader) -> bytes | None:
         mask_key = await reader.readexactly(4) if masked else None
         payload = await reader.readexactly(payload_len)
 
-        if opcode == 0x08:  # Connection closed frame
+        if opcode == 0x08:
             return None
 
         if mask_key:
@@ -113,7 +112,8 @@ async def pipe_tcp_to_ws(tcp_reader, ws_writer):
 async def handle_handshake(reader, writer) -> bool:
     try:
         header_bytes = b""
-        while b"\\r\\n\\r\\n" not in header_bytes:
+        # Tolerant of both standard \\r\\n\\r\\n and malformed \\n\\n injection payloads
+        while b"\\r\\n\\r\\n" not in header_bytes and b"\\n\\n" not in header_bytes:
             chunk = await reader.read(4096)
             if not chunk:
                 return False
@@ -121,26 +121,31 @@ async def handle_handshake(reader, writer) -> bool:
             if len(header_bytes) > 16384:
                 return False
 
-        lines = header_bytes.split(b"\\r\\n")
         ws_key = None
+        lines = header_bytes.replace(b"\\r", b"").split(b"\\n")
         for line in lines:
             if line.lower().startswith(b"sec-websocket-key:"):
                 ws_key = line.split(b":", 1)[1].strip().decode()
                 break
 
-        if not ws_key:
-            return False
+        if ws_key:
+            guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+            accept_raw = hashlib.sha1((ws_key + guid).encode()).digest()
+            accept_str = base64.b64encode(accept_raw).decode()
+            response = (
+                "HTTP/1.1 101 Switching Protocols\\r\\n"
+                "Upgrade: websocket\\r\\n"
+                "Connection: Upgrade\\r\\n"
+                f"Sec-WebSocket-Accept: {{accept_str}}\\r\\n\\r\\n"
+            )
+        else:
+            # Fallback for HTTP Injectors that don't send a standard WS Key
+            response = (
+                "HTTP/1.1 101 Switching Protocols\\r\\n"
+                "Upgrade: websocket\\r\\n"
+                "Connection: Upgrade\\r\\n\\r\\n"
+            )
 
-        guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-        accept_raw = hashlib.sha1((ws_key + guid).encode()).digest()
-        accept_str = base64.b64encode(accept_raw).decode()
-
-        response = (
-            "HTTP/1.1 101 Switching Protocols\\r\\n"
-            "Upgrade: websocket\\r\\n"
-            "Connection: Upgrade\\r\\n"
-            f"Sec-WebSocket-Accept: {{accept_str}}\\r\\n\\r\\n"
-        )
         writer.write(response.encode())
         await writer.drain()
         return True
@@ -148,7 +153,6 @@ async def handle_handshake(reader, writer) -> bool:
         return False
 
 async def main_handler(client_reader, client_writer):
-    # Enforce immediate TCP_NODELAY optimization on edge ingress interface
     client_sock = client_writer.get_extra_info('socket')
     if client_sock:
         client_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -166,7 +170,6 @@ async def main_handler(client_reader, client_writer):
         client_writer.close()
         return
 
-    # Rapid teardown layer utilizing structured task isolation
     t1 = asyncio.create_task(pipe_ws_to_tcp(client_reader, db_writer))
     t2 = asyncio.create_task(pipe_tcp_to_ws(db_reader, client_writer))
 
@@ -193,7 +196,6 @@ if __name__ == '__main__':
         PROXY_SCRIPT_PATH.write_text(script_content)
         PROXY_SCRIPT_PATH.chmod(0o755)
 
-        # Enforce highly reliable systemd process execution mapping
         unit_content = f"""[Unit]
 Description=SSHAuto Automated WebSocket High-Performance Proxy Core
 After=network.target
