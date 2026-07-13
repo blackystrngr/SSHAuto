@@ -1,3 +1,6 @@
+"""
+The interactive dashboard, launched by typing `kk` at the shell.
+"""
 from __future__ import annotations
 
 from core.config import state
@@ -7,6 +10,7 @@ from dashboard import ui
 from dashboard.monitor import Monitor
 from dashboard.ports import PortManager
 from dashboard.users import UserManager
+
 
 class Dashboard:
     def __init__(self):
@@ -30,7 +34,7 @@ class Dashboard:
         if stats:
             ui.kv_row("Active tunnels", str(stats.active_connections))
             ui.kv_row("Total accounts", str(stats.total_users))
-            ui.kv_row("Throughput", f"↓ {stats.rx_kbps} kbps  ↑ {stats.tx_kbps} kbps")
+            ui.kv_row("Throughput", f"↓ {stats.rx_kbps} kbps   ↑ {stats.tx_kbps} kbps")
         print()
         ui.menu([
             ("1", "Create SSH/websocket user"),
@@ -74,7 +78,6 @@ class Dashboard:
             pass
         ui.pause()
 
-    # ---------- action methods ----------
     def _create_user(self):
         ui.clear()
         ui.header("create user")
@@ -93,7 +96,8 @@ class Dashboard:
     def _list_users(self):
         ui.clear()
         ui.header("users", f"group: sshauto-users")
-        rows = [[u.username, u.expires, "locked" if u.locked else "active"] for u in self.users.list()]
+        rows = [[u.username, u.expires, "locked" if u.locked else "active"]
+                for u in self.users.list()]
         ui.table(["username", "expires", "status"], rows)
 
     def _live_view(self):
@@ -145,18 +149,16 @@ class Dashboard:
         PluginManager().status_all()
 
     def _manage_network_optimizer(self):
-        """Interactive dashboard screen mirroring 3x-ui optimization controls."""
         try:
             from features.network_optimizer import NetworkOptimizerFeature
             optimizer = NetworkOptimizerFeature()
         except ImportError:
-            log.error("NetworkOptimizerFeature module not found at features/network_optimizer.py")
+            log.error("NetworkOptimizerFeature module not found")
             return
 
         while True:
             ui.clear()
             ui.header("network acceleration hub", "optimize routing latency & bbr layers")
-
             is_active = optimizer.is_installed()
             status_text = "ENABLED & OPTIMIZED" if is_active else "DISABLED (STOCK LINUX)"
             status_color = "\033[1;32m" if is_active else "\033[1;31m"
@@ -170,13 +172,11 @@ class Dashboard:
             ui.kv_row("Kernel Alg", cc)
             ui.kv_row("Slow Start Config", ss)
             print()
-
             ui.menu([
                 ("1", "Apply Extreme Low-Latency Profile + BBR (3x-ui Optimization)"),
                 ("2", "Remove Optimizations (Reset to OS Default)"),
                 ("0", "Back to Main Menu")
             ])
-
             action = ui.prompt("Select action")
             if action == "0" or not action:
                 return
@@ -205,8 +205,10 @@ class Dashboard:
         except Exception:
             return None
 
+
 def main():
     Dashboard().run()
+
 
 if __name__ == "__main__":
     main()
