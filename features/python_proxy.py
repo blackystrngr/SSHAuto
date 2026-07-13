@@ -13,25 +13,26 @@ class PythonProxyFeature(BaseFeature):
 
     def install(self) -> None:
         log.info("Installing/Updating Python Proxy service...")
-        
-        # The proxy logic (the actual tunnel handler)
+
         script_content = r'''
 import asyncio
 import sys
 
 # Configuration
 BACKEND_IP = "127.0.0.1"
-BACKEND_PORT = 110 
+BACKEND_PORT = 113          # FIXED: matches config.py default
 LISTEN_PORT = 8000
 
 async def pipe(reader, writer):
     try:
         while True:
             data = await reader.read(4096)
-            if not data: break
+            if not data:
+                break
             writer.write(data)
             await writer.drain()
-    except Exception: pass
+    except Exception:
+        pass
     finally:
         writer.close()
 
@@ -40,30 +41,50 @@ async def handle(client_reader, client_writer):
         header = b""
         while b"\r\n\r\n" not in header:
             chunk = await client_reader.read(1024)
-            if not chunk: return
+            if not chunk:
+                return
             header += chunk
-        
-        client_writer.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
-        await client_writer.drain()
-        
-        try:
-            d_reader, d_writer = await asyncio.open_connection(BACKEND_IP, BACKEND_PORT)
-        except Exception: return
 
-        await asyncio.gather(pipe(client_reader, d_writer), pipe(d_reader, client_writer))
-    except Exception: pass
+        # Extract swallowed SSH handshake bytes that came after the headers
+        idx = header.find(b"\r\n\r\n")
+        trailing = header[idx+4:]
+
+        # Send 101 Switching Protocols
+        client_writer.write(b"HTTP/1.1 101 Switching Protocols\r\n"
+                            b"Upgrade: websocket\r\n"
+                            b"Connection: Upgrade\r\n\r\n")
+        await client_writer.drain()
+
+        # Connect to Dropbear
+        d_reader, d_writer = await asyncio.open_connection(BACKEND_IP, BACKEND_PORT)
+
+        # Immediately push the swallowed trailing bytes (SSH handshake)
+        if trailing:
+            d_writer.write(trailing)
+            await d_writer.drain()
+
+        # Bidirectional bridge
+        await asyncio.gather(
+            pipe(client_reader, d_writer),
+            pipe(d_reader, client_writer)
+        )
+    except Exception:
+        pass
     finally:
         client_writer.close()
 
 async def main():
-    server = await asyncio.start_server(handle, "127.0.0.1", LISTEN_PORT)
-    async with server: await server.serve_forever()
+    server = await asyncio.start_server(handle, "0.0.0.0", LISTEN_PORT)   # listen on all interfaces
+    async with server:
+        await server.serve_forever()
 
 if __name__ == "__main__":
     asyncio.run(main())
 '''
+
+        os.makedirs("/opt/sshauto", exist_ok=True)
         with open("/opt/sshauto/ws_proxy.py", "w") as f:
-            f.write(script_content)
+            f.write(script_content.strip() + "\n")
 
         # Create systemd service
         service_path = "/etc/systemd/system/sshauto-proxy.service"
@@ -83,13 +104,17 @@ WantedBy=multi-user.target
 
         Shell.run("systemctl daemon-reload")
         Shell.run("systemctl enable --now sshauto-proxy")
-        
-        # STRICT ENFORCEMENT
+        Shell.run("systemctl restart sshauto-proxy")
+
+        # Strict enforcement
         if not self.is_installed():
             raise Exception("Critical Failure: Python Proxy failed to start.")
         log.success("Python Proxy installed and verified.")
 
     def remove(self) -> None:
         Shell.run("systemctl stop sshauto-proxy", check=False)
-        Shell.run("rm /etc/systemd/system/sshauto-proxy.service", check=False)
+        Shell.run("systemctl disable sshauto-proxy", check=False)
+        Shell.run("rm -f /etc/systemd/system/sshauto-proxy.service", check=False)
+        Shell.run("rm -f /opt/sshauto/ws_proxy.py", check=False)
+        Shell.run("systemctl daemon-reload", check=False)
         log.info("Python Proxy removed")
