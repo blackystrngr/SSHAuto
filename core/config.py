@@ -7,6 +7,7 @@ without a database.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -15,24 +16,24 @@ from pathlib import Path
 # ----------------------------------------------------------------------
 HTTP_PORTS = {80, 8080, 8880, 2052, 2082, 2086, 2095}
 HTTPS_PORTS = {443, 8443, 2053, 2083, 2087, 2096}
-SSH_PORT_DEFAULT = 22          # real OpenSSH, direct access
-DROPBEAR_PORT_DEFAULT = 113    # dropbear tunnel backend (matches config)
-PROXY_PORT_DEFAULT = 8000      # Python asyncio proxy
+
+SSH_PORT_DEFAULT = 22                 # real OpenSSH, direct access
+DROPBEAR_PORT_DEFAULT = 110           # dropbear tunnel backend
+PROXY_PORT_DEFAULT = 8000             # Python asyncio proxy
 
 USER_GROUP = "sshauto-users"
 
-# Automation & polling timelines
 GIT_POLL_INTERVAL_SECONDS = 30
 
 # ----------------------------------------------------------------------
-# Package Management Requirements
+# Package Management
 # ----------------------------------------------------------------------
-REQUIRED_PACKAGES = ["nginx", "dropbear", "fail2ban", "iptables", "curl", "git"]
-REMOVE_PACKAGES = ["apache2"]   # Prevents port 80 binding conflicts
-PIP_PACKAGES = []               # Handled via requirements.txt
+REQUIRED_PACKAGES = ["nginx", "dropbear", "fail2ban", "iptables", "curl", "git", "certbot"]
+REMOVE_PACKAGES = ["apache2", "ufw", "firewalld"]
+PIP_PACKAGES = []
 
 # ----------------------------------------------------------------------
-# Filesystem paths (all as specified / conventional Debian-family paths)
+# Filesystem paths
 # ----------------------------------------------------------------------
 NGINX_SITES_AVAILABLE = Path("/etc/nginx/sites-available")
 NGINX_SITES_ENABLED = Path("/etc/nginx/sites-enabled")
@@ -42,16 +43,13 @@ SSHD_CONFIG = Path("/etc/ssh/sshd_config")
 SSH_BANNER_PATH = Path("/etc/ssh/sshd_banner")
 DROPBEAR_BANNER_PATH = Path("/etc/dropbear/banner")
 DROPBEAR_DEFAULTS_FILE = Path("/etc/default/dropbear")
-
 APP_ROOT = Path("/opt/sshauto")
 SSHAUTO_CERT_DIR = Path("/var/lib/sshauto/certs")
 LETSENCRYPT_LIVE = Path("/etc/letsencrypt/live")
 
-# System tracking & runtime directories
 LOG_DIR = Path("/var/log/sshauto")
 SYSTEMD_DIR = Path("/etc/systemd/system")
 
-# Fail2ban service layouts
 FAIL2BAN_FILTER_DIR = Path("/etc/fail2ban/filter.d")
 FAIL2BAN_JAIL_LOCAL = Path("/etc/fail2ban/jail.local")
 
