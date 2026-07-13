@@ -7,20 +7,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.config import APP_ROOT, DROPBEAR_PORT_DEFAULT, PROXY_PORT_DEFAULT, state
+from core.config import APP_ROOT, DROPBEAR_PORT_DEFAULT, state
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
 
+PROXY_PORT_DEFAULT = 8000
 PROXY_SCRIPT = APP_ROOT / "proxy" / "ws_proxy.py"
 PROXY_SERVICE = "/etc/systemd/system/sshauto-proxy.service"
-PROXY_LOG = "/var/log/sshauto/proxy.log"
 
 
 class PythonProxyFeature(BaseFeature):
     name = "python_proxy"
     description = "Install the asyncio WebSocket-to-TCP relay"
-    depends_on = ["packages", "dropbear_service"]
+    depends_on = ["packages"]   # only needs python3
 
     def is_installed(self) -> bool:
         return PROXY_SCRIPT.exists() and Path(PROXY_SERVICE).exists()
@@ -29,9 +29,6 @@ class PythonProxyFeature(BaseFeature):
         data = state.ensure_defaults()
         dropbear_port = data.get("dropbear_port", DROPBEAR_PORT_DEFAULT)
         proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
-
-        # Ensure log directory exists
-        Path(PROXY_LOG).parent.mkdir(parents=True, exist_ok=True)
 
         log.info(f"Writing WebSocket proxy to {PROXY_SCRIPT}")
         PROXY_SCRIPT.parent.mkdir(parents=True, exist_ok=True)
@@ -50,8 +47,8 @@ ExecStart=/usr/bin/python3 {PROXY_SCRIPT}
 Restart=always
 RestartSec=5
 User=root
-StandardOutput=append:{PROXY_LOG}
-StandardError=append:{PROXY_LOG}
+StandardOutput=append:/var/log/sshauto/proxy.log
+StandardError=append:/var/log/sshauto/proxy.log
 
 [Install]
 WantedBy=multi-user.target
@@ -77,13 +74,10 @@ WantedBy=multi-user.target
 """
 WebSocket-to-TCP proxy for sshauto.
 Listens on 127.0.0.1:{proxy_port}, handles websocket handshake,
-then forwards de-framed RFC6455 payloads to 127.0.0.1:{dropbear_port}.
+then forwards raw TCP to 127.0.0.1:{dropbear_port}.
 """
 import asyncio
-import struct
 import sys
-import base64
-from hashlib import sha1
 
 DROPBEAR_PORT = {dropbear_port}
 PROXY_PORT = {proxy_port}
@@ -96,63 +90,6 @@ def parse_headers(data):
             key, val = line.split(': ', 1)
             headers[key.lower()] = val
     return headers
-
-async def read_exact(reader, buf: bytearray, n: int):
-    """Ensure buf holds at least n bytes, pulling more off the socket as needed."""
-    while len(buf) < n:
-        chunk = await reader.read(max(4096, n - len(buf)))
-        if not chunk:
-            raise ConnectionError("peer closed mid-frame")
-        buf.extend(chunk)
-
-async def read_ws_frame(reader, buf: bytearray):
-    """
-    Parse exactly one RFC6455 frame (pulling more bytes from reader as
-    needed), unmasking the payload if the client set the MASK bit.
-    Returns (opcode, payload); leftover bytes stay buffered for next call.
-    """
-    await read_exact(reader, buf, 2)
-    b0, b1 = buf[0], buf[1]
-    opcode = b0 & 0x0F
-    masked = bool(b1 & 0x80)
-    length = b1 & 0x7F
-    header_len = 2
-
-    if length == 126:
-        await read_exact(reader, buf, 4)
-        length = struct.unpack("!H", bytes(buf[2:4]))[0]
-        header_len = 4
-    elif length == 127:
-        await read_exact(reader, buf, 10)
-        length = struct.unpack("!Q", bytes(buf[2:10]))[0]
-        header_len = 10
-
-    mask_key = b""
-    if masked:
-        await read_exact(reader, buf, header_len + 4)
-        mask_key = bytes(buf[header_len:header_len + 4])
-        header_len += 4
-
-    await read_exact(reader, buf, header_len + length)
-    payload = bytes(buf[header_len:header_len + length])
-    del buf[:header_len + length]
-
-    if masked:
-        payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
-
-    return opcode, payload
-
-def build_ws_frame(payload: bytes, opcode: int = 0x2) -> bytes:
-    """Build a single unmasked server->client frame (FIN=1)."""
-    header = bytes([0x80 | opcode])
-    n = len(payload)
-    if n < 126:
-        header += bytes([n])
-    elif n < 65536:
-        header += bytes([126]) + struct.pack("!H", n)
-    else:
-        header += bytes([127]) + struct.pack("!Q", n)
-    return header + payload
 
 async def handle_client(reader, writer):
     try:
@@ -188,40 +125,21 @@ async def handle_client(reader, writer):
             writer.close()
             return
 
-        async def client_to_dropbear():
-            buf = bytearray()
+        # Bidirectional raw forwarding
+        async def forward(src, dst):
             try:
                 while True:
-                    opcode, payload = await read_ws_frame(reader, buf)
-                    if opcode == 0x8:          # close
-                        break
-                    elif opcode == 0x9:        # ping -> pong
-                        writer.write(build_ws_frame(payload, opcode=0xA))
-                        await writer.drain()
-                    elif opcode == 0xA:        # pong, ignore
-                        pass
-                    elif payload:               # text/binary/continuation = tunnel data
-                        db_writer.write(payload)
-                        await db_writer.drain()
-            except Exception:
-                pass
-            finally:
-                db_writer.close()
-
-        async def dropbear_to_client():
-            try:
-                while True:
-                    data = await db_reader.read(8192)
+                    data = await src.read(8192)
                     if not data:
                         break
-                    writer.write(build_ws_frame(data))
-                    await writer.drain()
+                    dst.write(data)
+                    await dst.drain()
             except Exception:
                 pass
             finally:
-                writer.close()
+                dst.close()
 
-        await asyncio.gather(client_to_dropbear(), dropbear_to_client())
+        await asyncio.gather(forward(reader, db_writer), forward(db_reader, writer))
 
     except Exception:
         pass
@@ -234,5 +152,7 @@ async def main():
     await server.serve_forever()
 
 if __name__ == '__main__':
+    import base64, hashlib
+    from hashlib import sha1
     asyncio.run(main())
 '''
