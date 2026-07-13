@@ -21,11 +21,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core.config import state  # noqa: E402
-from core.exceptions import SSHAutoError  # noqa: E402
-from core.logger import log  # noqa: E402
-from core.plugin_manager import PluginManager  # noqa: E402
-from core.shell import Shell  # noqa: E402
+from core.config import state
+from core.exceptions import SSHAutoError
+from core.logger import log
+from core.plugin_manager import PluginManager
+from core.shell import Shell
 
 BANNER = r"""
    _____ _____ _   _   ___         _
@@ -100,7 +100,7 @@ def cmd_uninstall(args):
         try:
             manager.get(name).remove()
             log.success(f"{name} removed")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.error(f"{name} teardown failed: {exc}")
 
 
