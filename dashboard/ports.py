@@ -52,14 +52,20 @@ class PortManager:
         if not (1 <= port <= 65535):
             raise ValidationError("System target network port boundary must fall between 1 and 65535")
 
-    def _apply(self):
+   def _apply(self):
         """Forces immediate runtime propagation across Nginx routes and Firewall rules."""
         try:
             from features.nginx_relay import NginxRelayFeature
             from features.firewall import FirewallFeature
             
             log.info("Re-applying updated port matrices into system configurations...")
+            # Nginx is critical, install it first
             NginxRelayFeature().install()
-            FirewallFeature().install()
+            
+            # Firewalls can be finicky; log specifically if this fails
+            fw = FirewallFeature()
+            if not fw.is_installed():
+                log.warning("Firewall feature detected as not installed, attempting repair...")
+                fw.install()
         except Exception as exc:
-            log.error(f"Failed to synchronize live services with updated ports: {exc}")
+            log.error(f"Failed to synchronize live services: {exc}")
