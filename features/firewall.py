@@ -2,12 +2,13 @@
 Firewall policy updated for SSHAuto:
   - Flushes all existing rules completely.
   - Allows loopback traffic and established connections.
+  - Allows the real OpenSSH port (direct admin access).
   - Opens explicit HTTP ports (80, 8080, 8880) and HTTPS ports (8443, 2096).
   - Drops everything else on INPUT/FORWARD.
 """
 from __future__ import annotations
 
-from core.config import state
+from core.config import state, SSH_PORT_DEFAULT
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
@@ -23,6 +24,9 @@ class FirewallFeature(BaseFeature):
         return result.ok and "DROP" in result.stdout
 
     def install(self) -> None:
+        data = state.ensure_defaults()
+        ssh_port = data.get("ssh_port", SSH_PORT_DEFAULT)
+
         # Explicit target ports requested by the architecture
         http_ports = [80, 8080, 8880]
         https_ports = [8443, 2096]
@@ -40,16 +44,17 @@ class FirewallFeature(BaseFeature):
             "iptables -A INPUT -i lo -j ACCEPT",
             "iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
             "iptables -A INPUT -p icmp --icmp-type echo-request -j ACCEPT",
+            f"iptables -A INPUT -p tcp --dport {ssh_port} -j ACCEPT",  # real OpenSSH -- was missing
         ]
-        
+
         # Open explicit TCP ports for the Nginx front-end relay
         for port in all_ports:
             base_rules.append(f"iptables -A INPUT -p tcp --dport {port} -j ACCEPT")
 
         for rule in base_rules:
             Shell.run(rule)
-            
-        log.success(f"IPv4: Configured default DROP policy and allowed relay ports: {all_ports}")
+
+        log.success(f"IPv4: Configured default DROP policy, allowed SSH port {ssh_port} and relay ports: {all_ports}")
 
         self._block_ipv6()
         self._persist()
@@ -66,7 +71,7 @@ class FirewallFeature(BaseFeature):
         Shell.run("ip6tables -F", check=False)
         for rule in ("ip6tables -P INPUT DROP", "ip6tables -P FORWARD DROP", "ip6tables -P OUTPUT DROP"):
             Shell.run(rule, check=False)
-            
+
         sysctl_conf = (
             "net.ipv6.conf.all.disable_ipv6 = 1\n"
             "net.ipv6.conf.default.disable_ipv6 = 1\n"
