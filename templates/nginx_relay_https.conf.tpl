@@ -7,6 +7,7 @@
 server {
 @HTTPS_LISTEN_BLOCK@
     server_name _;
+    tcp_nodelay on;
 
     ssl_certificate     @CERT_PATH@;
     ssl_certificate_key @KEY_PATH@;
@@ -29,5 +30,6 @@ server {
         proxy_request_buffering off;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
+        tcp_nodelay on;
     }
 }
