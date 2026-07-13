@@ -4,36 +4,29 @@
 #  `sshauto update` or dashboard port change.
 # ============================================================
 
-# Websocket-upgrade detection shared by every server block below.
-map $http_upgrade $connection_upgrade {
-    default upgrade;
-    ''      close;
-}
-
-# ---- Plain HTTP relay --------------------------------------------------
-# Listens on every HTTP_PORTS entry on all interfaces. We do not care
-# which domain/SNI the client used (server_name _ = catch-all); any
-# websocket-upgrade request is forwarded raw to the local dropbear
-# backend, which performs the real SSH authentication.
+# ---- Plain HTTP relay --------------------------------------
+# Listens on every HTTP_PORTS entry on all interfaces.
+# The Python proxy will upgrade the connection to a raw TCP tunnel.
 server {
 @HTTP_LISTEN_BLOCK@
     server_name _;
     tcp_nodelay on;
 
+    client_header_timeout 86400s;
+    client_body_timeout 86400s;
+    client_max_body_size 0;
+
     location / {
         proxy_pass http://127.0.0.1:@PROXY_PORT@;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
-        # keep the raw byte stream flowing instantly in both directions
+        # low‑latency streaming (buffering off)
         proxy_buffering off;
         proxy_request_buffering off;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_connect_timeout 10s;
         tcp_nodelay on;
     }
 }
