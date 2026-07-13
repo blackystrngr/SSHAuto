@@ -16,6 +16,11 @@ server {
     ssl_prefer_server_ciphers on;
     ssl_early_data on;
 
+    # Buffer tuning
+    proxy_buffer_size 128k;
+    proxy_buffers 4 256k;
+    proxy_busy_buffers_size 256k;
+
     location / {
         proxy_pass http://127.0.0.1:@PROXY_PORT@;
         proxy_http_version 1.1;
