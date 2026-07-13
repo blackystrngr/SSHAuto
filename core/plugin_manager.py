@@ -1,19 +1,6 @@
 """
 PluginManager discovers every BaseFeature subclass living under
 features/*.py, resolves install order from `depends_on`, and runs them.
-
-This is the "framework for adding new features" the project needs:
-to add a capability, create features/my_thing.py with a class
-
-    class MyThing(BaseFeature):
-        name = "my_thing"
-        description = "..."
-        depends_on = ["packages"]
-        def is_installed(self): ...
-        def install(self): ...
-        def remove(self): ...
-
-and it is picked up automatically — nothing else to register.
 """
 from __future__ import annotations
 
@@ -21,7 +8,7 @@ import importlib
 import pkgutil
 from typing import Type
 
-import features as features_pkg  # noqa: F401 - package to scan
+import features as features_pkg
 from core.exceptions import DependencyError
 from core.logger import log
 from features.base import BaseFeature
@@ -54,7 +41,6 @@ class PluginManager:
         return self._classes[name]()
 
     def _ordered(self, wanted: list[str] | None = None) -> list[BaseFeature]:
-        """Topological sort so dependencies install before dependents."""
         wanted = wanted or self.names()
         resolved: list[str] = []
         visiting: set[str] = set()
