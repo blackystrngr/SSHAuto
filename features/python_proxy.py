@@ -20,17 +20,15 @@ class PythonProxyFeature(BaseFeature):
         proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
         dropbear_port = data.get("dropbear_port", 110)
         
-        # Generate proxy script with DeepSeek optimizations
+        # Exact proxy code from the standalone script
         proxy_code = f'''#!/usr/bin/env python3
 import asyncio
 import socket
 
-BACKEND_IP = "127.0.0.1"
-BACKEND_PORT = {dropbear_port}
-LISTEN_PORT = {proxy_port}
+DROPBEAR_PORT = {dropbear_port}
 
 async def force_upgrade_and_bridge(reader, writer):
-    # TCP_NODELAY on client socket (disable Nagle)
+    # Enable TCP_NODELAY on the client socket
     sock = writer.get_extra_info('socket')
     if sock is not None:
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -48,14 +46,14 @@ async def force_upgrade_and_bridge(reader, writer):
     writer.write(b'\\r\\n')
     await writer.drain()
 
-    # Connect to local Dropbear
+    # Connect to Dropbear
     try:
-        ssh_reader, ssh_writer = await asyncio.open_connection(BACKEND_IP, BACKEND_PORT)
+        ssh_reader, ssh_writer = await asyncio.open_connection('127.0.0.1', DROPBEAR_PORT)
     except Exception:
         writer.close()
         return
 
-    # TCP_NODELAY on SSH socket
+    # TCP_NODELAY on SSH connection
     ssh_sock = ssh_writer.get_extra_info('socket')
     if ssh_sock is not None:
         ssh_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -90,11 +88,10 @@ async def force_upgrade_and_bridge(reader, writer):
 
 async def main():
     server = await asyncio.start_server(
-        force_upgrade_and_bridge, '127.0.0.1', LISTEN_PORT,
+        force_upgrade_and_bridge, '127.0.0.1', {proxy_port},
         backlog=128,
         reuse_address=True,
     )
-    # Apply low‑latency socket options to the listening socket
     for s in server.sockets:
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -115,10 +112,9 @@ if __name__ == '__main__':
         proxy_path.write_text(proxy_code)
         proxy_path.chmod(0o755)
 
-        # Create systemd service
         service_path = Path("/etc/systemd/system/sshauto-proxy.service")
         service_content = f"""[Unit]
-Description=SSHAuto WebSocket Proxy (Low‑Latency)
+Description=Forced-Upgrade TCP Proxy to SSH (Low Latency)
 After=network.target
 
 [Service]
