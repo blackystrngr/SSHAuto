@@ -24,10 +24,7 @@ HARDENING_DIRECTIVES = {
     "ClientAliveCountMax": "3",
     "MaxAuthTries": "4",
     "LoginGraceTime": "20",
-    # --- Speed optimisations ---
-    "Ciphers": "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes256-gcm@openssh.com",
-    "MACs": "umac-128-etm@openssh.com",
-    "KexAlgorithms": "curve25519-sha256@libssh.org,ecdh-sha2-nistp256",
+    
 }
 
 
