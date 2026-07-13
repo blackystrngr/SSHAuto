@@ -1,26 +1,30 @@
 """
 Python asyncio websocket-to-TCP proxy.
 Listens on 127.0.0.1:<proxy_port>, handles WebSocket upgrade,
-then forwards raw bytes to dropbear on 127.0.0.1:<dropbear_port>.
+then forwards WebSocket payloads to dropbear and frames responses back.
 """
 from __future__ import annotations
 
+import asyncio
+import base64
+import struct
+from hashlib import sha1
 from pathlib import Path
 
-from core.config import APP_ROOT, DROPBEAR_PORT_DEFAULT, state
+from core.config import APP_ROOT, DROPBEAR_PORT_DEFAULT, PROXY_PORT_DEFAULT, state
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
 
-PROXY_PORT_DEFAULT = 8000
 PROXY_SCRIPT = APP_ROOT / "proxy" / "ws_proxy.py"
 PROXY_SERVICE = "/etc/systemd/system/sshauto-proxy.service"
+PROXY_LOG = "/var/log/sshauto/proxy.log"
 
 
 class PythonProxyFeature(BaseFeature):
     name = "python_proxy"
     description = "Install the asyncio WebSocket-to-TCP relay"
-    depends_on = ["packages"]   # only needs python3
+    depends_on = ["packages", "dropbear_service"]
 
     def is_installed(self) -> bool:
         return PROXY_SCRIPT.exists() and Path(PROXY_SERVICE).exists()
@@ -29,6 +33,8 @@ class PythonProxyFeature(BaseFeature):
         data = state.ensure_defaults()
         dropbear_port = data.get("dropbear_port", DROPBEAR_PORT_DEFAULT)
         proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
+
+        Path(PROXY_LOG).parent.mkdir(parents=True, exist_ok=True)
 
         log.info(f"Writing WebSocket proxy to {PROXY_SCRIPT}")
         PROXY_SCRIPT.parent.mkdir(parents=True, exist_ok=True)
@@ -47,8 +53,8 @@ ExecStart=/usr/bin/python3 {PROXY_SCRIPT}
 Restart=always
 RestartSec=5
 User=root
-StandardOutput=append:/var/log/sshauto/proxy.log
-StandardError=append:/var/log/sshauto/proxy.log
+StandardOutput=append:{PROXY_LOG}
+StandardError=append:{PROXY_LOG}
 
 [Install]
 WantedBy=multi-user.target
@@ -68,45 +74,99 @@ WantedBy=multi-user.target
         Shell.run("systemctl daemon-reload", check=False)
         log.info("Python proxy removed")
 
-    # ---------- helper to generate the proxy script ----------
     def _proxy_code(self, dropbear_port: int, proxy_port: int) -> str:
         return f'''#!/usr/bin/env python3
 """
-WebSocket-to-TCP proxy for sshauto.
-Listens on 127.0.0.1:{proxy_port}, handles websocket handshake,
-then forwards raw TCP to 127.0.0.1:{dropbear_port}.
+WebSocket-to-TCP proxy with full frame handling.
+Listens on 127.0.0.1:{proxy_port}, forwards WebSocket payloads to dropbear:{dropbear_port}.
 """
 import asyncio
+import base64
+import struct
 import sys
+from hashlib import sha1
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filename='{PROXY_LOG}',
+    filemode='a'
+)
+log = logging.getLogger("ws_proxy")
 
 DROPBEAR_PORT = {dropbear_port}
 PROXY_PORT = {proxy_port}
 
-def parse_headers(data):
-    lines = data.decode('utf-8', errors='ignore').split('\\r\\n')
-    headers = {{}}
-    for line in lines[1:]:
-        if ': ' in line:
-            key, val = line.split(': ', 1)
-            headers[key.lower()] = val
-    return headers
+# ---------- WebSocket frame helpers ----------
+def decode_frame(data):
+    """Parse a WebSocket frame, return (opcode, payload, remaining_data)."""
+    if len(data) < 2:
+        return None, None, data
+    b1, b2 = data[0], data[1]
+    fin = (b1 & 0x80) != 0
+    opcode = b1 & 0x0F
+    masked = (b2 & 0x80) != 0
+    payload_len = b2 & 0x7F
+    offset = 2
+    if payload_len == 126:
+        if len(data) < 4:
+            return None, None, data
+        payload_len = struct.unpack(">H", data[2:4])[0]
+        offset = 4
+    elif payload_len == 127:
+        if len(data) < 10:
+            return None, None, data
+        payload_len = struct.unpack(">Q", data[2:10])[0]
+        offset = 10
+    if masked:
+        if len(data) < offset + 4:
+            return None, None, data
+        mask = data[offset:offset+4]
+        offset += 4
+    else:
+        mask = None
+    if len(data) < offset + payload_len:
+        return None, None, data  # incomplete frame
+    payload = data[offset:offset+payload_len]
+    if mask:
+        payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+    remaining = data[offset+payload_len:]
+    return opcode, payload, remaining
 
+def encode_frame(opcode, payload, mask=False):
+    """Encode a WebSocket frame."""
+    b1 = 0x80 | (opcode & 0x0F)  # fin=1
+    payload_len = len(payload)
+    header = bytearray()
+    header.append(b1)
+    if payload_len <= 125:
+        header.append(0x80 if mask else 0x00 | payload_len)
+    elif payload_len <= 65535:
+        header.append(0x80 if mask else 0x00 | 126)
+        header.extend(struct.pack(">H", payload_len))
+    else:
+        header.append(0x80 if mask else 0x00 | 127)
+        header.extend(struct.pack(">Q", payload_len))
+    if mask:
+        mask_key = b'\\x00\\x01\\x02\\x03'  # dummy, not actually used for server->client
+        header.extend(mask_key)
+        payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+    return header + payload
+
+# ---------- proxy logic ----------
 async def handle_client(reader, writer):
     try:
-        # Read the HTTP request
+        # read HTTP request
         request = await reader.read(4096)
         if not request:
             return
-
-        # Check for Upgrade: websocket
         headers = parse_headers(request)
         if headers.get('upgrade', '').lower() != 'websocket':
-            # Not a websocket request – close or return 400
             writer.write(b"HTTP/1.1 400 Bad Request\\r\\n\\r\\n")
             await writer.drain()
             return
-
-        # Accept the WebSocket upgrade
+        # accept handshake
         key = headers.get('sec-websocket-key', '')
         accept = base64.b64encode(sha1(key.encode() + b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest()).decode()
         response = (
@@ -117,42 +177,82 @@ async def handle_client(reader, writer):
         )
         writer.write(response.encode())
         await writer.drain()
+        log.info(f"WebSocket handshake accepted from {{writer.get_extra_info('peername')}}")
 
-        # Now connect to dropbear
+        # connect to dropbear
         try:
             db_reader, db_writer = await asyncio.open_connection('127.0.0.1', DROPBEAR_PORT)
-        except Exception:
+        except Exception as e:
+            log.error(f"Can't connect to dropbear: {{e}}")
             writer.close()
             return
 
-        # Bidirectional raw forwarding
-        async def forward(src, dst):
-            try:
-                while True:
-                    data = await src.read(8192)
+        # forward WebSocket frames -> dropbear
+        async def ws_to_tcp():
+            buffer = b''
+            while True:
+                try:
+                    data = await reader.read(8192)
                     if not data:
                         break
-                    dst.write(data)
-                    await dst.drain()
-            except Exception:
-                pass
-            finally:
-                dst.close()
+                    buffer += data
+                    while buffer:
+                        opcode, payload, remaining = decode_frame(buffer)
+                        if opcode is None:
+                            break  # incomplete frame, wait for more
+                        if opcode == 0x08:  # close
+                            log.info("Received close frame")
+                            writer.close()
+                            return
+                        if opcode == 0x02 or opcode == 0x01:  # binary or text
+                            db_writer.write(payload)
+                            await db_writer.drain()
+                        buffer = remaining
+                except Exception as e:
+                    log.error(f"ws_to_tcp error: {{e}}")
+                    break
 
-        await asyncio.gather(forward(reader, db_writer), forward(db_reader, writer))
+        # forward dropbear -> WebSocket frames
+        async def tcp_to_ws():
+            while True:
+                try:
+                    data = await db_reader.read(8192)
+                    if not data:
+                        break
+                    # send as binary frame
+                    frame = encode_frame(0x02, data, mask=False)
+                    writer.write(frame)
+                    await writer.drain()
+                except Exception as e:
+                    log.error(f"tcp_to_ws error: {{e}}")
+                    break
 
-    except Exception:
-        pass
+        await asyncio.gather(ws_to_tcp(), tcp_to_ws())
+
+    except Exception as e:
+        log.error(f"handle_client exception: {{e}}")
     finally:
         writer.close()
+        try:
+            db_writer.close()
+        except:
+            pass
+        log.info("Connection closed")
+
+def parse_headers(data):
+    lines = data.decode('utf-8', errors='ignore').split('\\r\\n')
+    headers = {{}}
+    for line in lines[1:]:
+        if ': ' in line:
+            k, v = line.split(': ', 1)
+            headers[k.lower()] = v
+    return headers
 
 async def main():
     server = await asyncio.start_server(handle_client, '127.0.0.1', PROXY_PORT)
-    print(f"[+] WebSocket proxy running on 127.0.0.1:{{PROXY_PORT}} -> dropbear:{{DROPBEAR_PORT}}")
+    log.info(f"Proxy listening on 127.0.0.1:{{PROXY_PORT}} -> dropbear:{{DROPBEAR_PORT}}")
     await server.serve_forever()
 
 if __name__ == '__main__':
-    import base64, hashlib
-    from hashlib import sha1
     asyncio.run(main())
 '''
