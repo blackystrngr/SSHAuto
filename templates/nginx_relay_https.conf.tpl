@@ -28,6 +28,7 @@ server {
 
         proxy_buffering off;
         proxy_request_buffering off;
+        proxy_cache off;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
         tcp_nodelay on;
