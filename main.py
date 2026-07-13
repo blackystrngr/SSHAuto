@@ -122,6 +122,22 @@ def _install_kk_command():
     except OSError as exc:
         log.warning(f"could not install the 'kk' shortcut: {exc}")
 
+def cmd_client_config(args):
+    from core.config import state
+    data = state.load()
+    domain = data.get("cert_domain", "your.domain.com")
+    print("\n" + "=" * 50)
+    print("      HTTP INJECTOR CLIENT CONFIGURATION      ")
+    print("=" * 50)
+    print(f"[+] Tunnel Type: SSH -> Custom Payload (raw TCP)")
+    print(f"[+] Payload:     GET / HTTP/1.1[crlf]Host: {domain}[crlf][crlf]")
+    print(f"[+] Proxy IP:    {domain}")
+    print(f"[+] Proxy Port:  80 (also 8080, 8880, or 443/8443/2096 with SSL)")
+    print(f"[+] SSH Host:    {domain}")
+    print(f"[+] SSH Port:    80 (use SSL ports if HTTPS is set up)")
+    print("=" * 50 + "\n")
+    print("IMPORTANT: Ensure Cloudflare proxy is OFF (grey cloud) for this domain!")
+    print("Otherwise you will get 521 errors.\n")
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sshauto")
@@ -149,6 +165,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_dash = sub.add_parser("dashboard", help="open the kk dashboard")
     p_dash.set_defaults(func=cmd_dashboard)
+
+    p_client = sub.add_parser("client-config", help="print HTTP Injector client configuration")
+    p_client.set_defaults(func=cmd_client_config)
 
     return parser
 
