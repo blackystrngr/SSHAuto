@@ -1,158 +1,226 @@
 """
-Python asyncio websocket-to-TCP proxy.
-Listens on 127.0.0.1:<proxy_port>, handles WebSocket upgrade,
-then forwards raw bytes to dropbear on 127.0.0.1:<dropbear_port>.
+Manages the extreme low-latency Python Asyncio WebSocket proxy infrastructure service.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
-
-from core.config import APP_ROOT, DROPBEAR_PORT_DEFAULT, state
+from core.config import APP_ROOT, state
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
 
-PROXY_PORT_DEFAULT = 8000
-PROXY_SCRIPT = APP_ROOT / "proxy" / "ws_proxy.py"
-PROXY_SERVICE = "/etc/systemd/system/sshauto-proxy.service"
+PROXY_SCRIPT_PATH = APP_ROOT / "ws_proxy.py"
+SYSTEMD_UNIT_PATH = Path("/etc/systemd/system/sshauto-proxy.service")
 
 
 class PythonProxyFeature(BaseFeature):
     name = "python_proxy"
-    description = "Install the asyncio WebSocket-to-TCP relay"
-    depends_on = ["packages"]   # only needs python3
+    description = "Deploy performance-tuned WebSocket to Dropbear asyncio engine"
+    depends_on = ["packages"]
 
     def is_installed(self) -> bool:
-        return PROXY_SCRIPT.exists() and Path(PROXY_SERVICE).exists()
+        return PROXY_SCRIPT_PATH.exists() and SYSTEMD_UNIT_PATH.exists()
 
     def install(self) -> None:
         data = state.ensure_defaults()
-        dropbear_port = data.get("dropbear_port", DROPBEAR_PORT_DEFAULT)
-        proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
+        proxy_port = data.get("proxy_port", 8000)
+        dropbear_port = data.get("dropbear_port", 110)
 
-        log.info(f"Writing WebSocket proxy to {PROXY_SCRIPT}")
-        PROXY_SCRIPT.parent.mkdir(parents=True, exist_ok=True)
-        PROXY_SCRIPT.write_text(self._proxy_code(dropbear_port, proxy_port))
-        PROXY_SCRIPT.chmod(0o755)
+        APP_ROOT.mkdir(parents=True, exist_ok=True)
 
-        log.info(f"Creating systemd service: {PROXY_SERVICE}")
-        service_content = f"""[Unit]
-Description=sshauto WebSocket proxy
-After=network-online.target dropbear.service
-Wants=dropbear.service
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/python3 {PROXY_SCRIPT}
-Restart=always
-RestartSec=5
-User=root
-StandardOutput=append:/var/log/sshauto/proxy.log
-StandardError=append:/var/log/sshauto/proxy.log
-
-[Install]
-WantedBy=multi-user.target
-"""
-        Path(PROXY_SERVICE).write_text(service_content)
-
-        Shell.run("systemctl daemon-reload")
-        Shell.run("systemctl enable sshauto-proxy")
-        Shell.run("systemctl restart sshauto-proxy")
-        log.success(f"Proxy listening on 127.0.0.1:{proxy_port}, forwarding to dropbear:{dropbear_port}")
-
-    def remove(self) -> None:
-        Shell.run("systemctl stop sshauto-proxy", check=False)
-        Shell.run("systemctl disable sshauto-proxy", check=False)
-        Path(PROXY_SERVICE).unlink(missing_ok=True)
-        PROXY_SCRIPT.unlink(missing_ok=True)
-        Shell.run("systemctl daemon-reload", check=False)
-        log.info("Python proxy removed")
-
-    # ---------- helper to generate the proxy script ----------
-    def _proxy_code(self, dropbear_port: int, proxy_port: int) -> str:
-        return f'''#!/usr/bin/env python3
-"""
-WebSocket-to-TCP proxy for sshauto.
-Listens on 127.0.0.1:{proxy_port}, handles websocket handshake,
-then forwards raw TCP to 127.0.0.1:{dropbear_port}.
-"""
+        # Build highly optimized runtime proxy asset
+        script_content = f"""#!/usr/bin/env python3
 import asyncio
-import sys
+import socket
+import hashlib
+import base64
 
-DROPBEAR_PORT = {dropbear_port}
-PROXY_PORT = {proxy_port}
+try:
+    import uvloop
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+except ImportError:
+    pass
 
-def parse_headers(data):
-    lines = data.decode('utf-8', errors='ignore').split('\\r\\n')
-    headers = {{}}
-    for line in lines[1:]:
-        if ': ' in line:
-            key, val = line.split(': ', 1)
-            headers[key.lower()] = val
-    return headers
+BUFFER_SIZE = 65536  # Synchronized with Dropbear -W receive window boundaries
 
-async def handle_client(reader, writer):
+def make_ws_frame(data: bytes) -> bytes:
+    b1 = 0x82  # FIN=1, Opcode=2 (Binary Frame Profile)
+    length = len(data)
+    if length < 126:
+        header = bytes([b1, length])
+    elif length <= 0xFFFF:
+        header = bytes([b1, 126]) + length.to_bytes(2, byteorder='big')
+    else:
+        header = bytes([b1, 127]) + length.to_bytes(8, byteorder='big')
+    return header + data
+
+async def read_ws_frame(reader: asyncio.StreamReader) -> bytes | None:
     try:
-        # Read the HTTP request
-        request = await reader.read(4096)
-        if not request:
-            return
+        header = await reader.readexactly(2)
+        if not header:
+            return None
+        b1, b2 = header[0], header[1]
+        opcode = b1 & 0x0F
+        masked = bool(b2 & 0x80)
+        payload_len = b2 & 0x7F
 
-        # Check for Upgrade: websocket
-        headers = parse_headers(request)
-        if headers.get('upgrade', '').lower() != 'websocket':
-            # Not a websocket request – close or return 400
-            writer.write(b"HTTP/1.1 400 Bad Request\\r\\n\\r\\n")
-            await writer.drain()
-            return
+        if payload_len == 126:
+            ext = await reader.readexactly(2)
+            payload_len = int.from_bytes(ext, byteorder='big')
+        elif payload_len == 127:
+            ext = await reader.readexactly(8)
+            payload_len = int.from_bytes(ext, byteorder='big')
 
-        # Accept the WebSocket upgrade
-        key = headers.get('sec-websocket-key', '')
-        accept = base64.b64encode(sha1(key.encode() + b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest()).decode()
+        mask_key = await reader.readexactly(4) if masked else None
+        payload = await reader.readexactly(payload_len)
+
+        if opcode == 0x08:  # Connection closed frame
+            return None
+
+        if mask_key:
+            payload = bytearray(payload)
+            for i in range(len(payload)):
+                payload[i] ^= mask_key[i % 4]
+            payload = bytes(payload)
+        return payload
+    except Exception:
+        return None
+
+async def pipe_ws_to_tcp(ws_reader, tcp_writer):
+    try:
+        while True:
+            payload = await read_ws_frame(ws_reader)
+            if payload is None:
+                break
+            if payload:
+                tcp_writer.write(payload)
+                await tcp_writer.drain()
+    except Exception:
+        pass
+
+async def pipe_tcp_to_ws(tcp_reader, ws_writer):
+    try:
+        while True:
+            data = await tcp_reader.read(BUFFER_SIZE)
+            if not data:
+                break
+            ws_writer.write(make_ws_frame(data))
+            await ws_writer.drain()
+    except Exception:
+        pass
+
+async def handle_handshake(reader, writer) -> bool:
+    try:
+        header_bytes = b""
+        while b"\\r\\n\\r\\n" not in header_bytes:
+            chunk = await reader.read(4096)
+            if not chunk:
+                return False
+            header_bytes += chunk
+            if len(header_bytes) > 16384:
+                return False
+
+        lines = header_bytes.split(b"\\r\\n")
+        ws_key = None
+        for line in lines:
+            if line.lower().startswith(b"sec-websocket-key:"):
+                ws_key = line.split(b":", 1)[1].strip().decode()
+                break
+
+        if not ws_key:
+            return False
+
+        guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+        accept_raw = hashlib.sha1((ws_key + guid).encode()).digest()
+        accept_str = base64.b64encode(accept_raw).decode()
+
         response = (
             "HTTP/1.1 101 Switching Protocols\\r\\n"
             "Upgrade: websocket\\r\\n"
             "Connection: Upgrade\\r\\n"
-            f"Sec-WebSocket-Accept: {{accept}}\\r\\n\\r\\n"
+            f"Sec-WebSocket-Accept: {{accept_str}}\\r\\n\\r\\n"
         )
         writer.write(response.encode())
         await writer.drain()
-
-        # Now connect to dropbear
-        try:
-            db_reader, db_writer = await asyncio.open_connection('127.0.0.1', DROPBEAR_PORT)
-        except Exception:
-            writer.close()
-            return
-
-        # Bidirectional raw forwarding
-        async def forward(src, dst):
-            try:
-                while True:
-                    data = await src.read(8192)
-                    if not data:
-                        break
-                    dst.write(data)
-                    await dst.drain()
-            except Exception:
-                pass
-            finally:
-                dst.close()
-
-        await asyncio.gather(forward(reader, db_writer), forward(db_reader, writer))
-
+        return True
     except Exception:
-        pass
-    finally:
-        writer.close()
+        return False
+
+async def main_handler(client_reader, client_writer):
+    # Enforce immediate TCP_NODELAY optimization on edge ingress interface
+    client_sock = client_writer.get_extra_info('socket')
+    if client_sock:
+        client_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+    if not await handle_handshake(client_reader, client_writer):
+        client_writer.close()
+        return
+
+    try:
+        db_reader, db_writer = await asyncio.open_connection('127.0.0.1', {dropbear_port})
+        db_sock = db_writer.get_extra_info('socket')
+        if db_sock:
+            db_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except Exception:
+        client_writer.close()
+        return
+
+    # Rapid teardown layer utilizing structured task isolation
+    t1 = asyncio.create_task(pipe_ws_to_tcp(client_reader, db_writer))
+    t2 = asyncio.create_task(pipe_tcp_to_ws(db_reader, client_writer))
+
+    await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
+    
+    for task in [t1, t2]:
+        if not task.done():
+            task.cancel()
+
+    for w in [client_writer, db_writer]:
+        try:
+            w.close()
+        except Exception:
+            pass
 
 async def main():
-    server = await asyncio.start_server(handle_client, '127.0.0.1', PROXY_PORT)
-    print(f"[+] WebSocket proxy running on 127.0.0.1:{{PROXY_PORT}} -> dropbear:{{DROPBEAR_PORT}}")
-    await server.serve_forever()
+    server = await asyncio.start_server(main_handler, '127.0.0.1', {proxy_port}, backlog=256)
+    async with server:
+        await server.serve_forever()
 
 if __name__ == '__main__':
-    import base64, hashlib
-    from hashlib import sha1
     asyncio.run(main())
-'''
+"""
+        PROXY_SCRIPT_PATH.write_text(script_content)
+        PROXY_SCRIPT_PATH.chmod(0o755)
+
+        # Enforce highly reliable systemd process execution mapping
+        unit_content = f"""[Unit]
+Description=SSHAuto Automated WebSocket High-Performance Proxy Core
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 {PROXY_SCRIPT_PATH}
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+"""
+        SYSTEMD_UNIT_PATH.write_text(unit_content)
+        
+        Shell.run("systemctl daemon-reload")
+        Shell.run("systemctl enable sshauto-proxy")
+        Shell.run("systemctl restart sshauto-proxy")
+        log.success("Performance optimized proxy build actively handling system workflows.")
+
+    def remove(self) -> None:
+        Shell.run("systemctl stop sshauto-proxy", check=False)
+        Shell.run("systemctl disable sshauto-proxy", check=False)
+        if SYSTEMD_UNIT_PATH.exists():
+            SYSTEMD_UNIT_PATH.unlink()
+        if PROXY_SCRIPT_PATH.exists():
+            PROXY_SCRIPT_PATH.unlink()
+        Shell.run("systemctl daemon-reload", check=False)
