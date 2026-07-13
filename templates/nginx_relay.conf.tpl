@@ -1,5 +1,5 @@
 # ============================================================
-#  Managed by sshauto
+#  Managed by sshauto – exact copy of working standalone config
 # ============================================================
 
 server {
@@ -16,6 +16,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
 
+        # low‑latency proxy settings
         proxy_buffering off;
         proxy_request_buffering off;
         proxy_read_timeout 86400s;
