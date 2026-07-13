@@ -1,118 +1,121 @@
-import os
+"""
+Builds /etc/nginx/sites-available/sshauto-relay.conf from the two
+templates and symlinks it into sites-enabled. Regenerated any time ports
+change (dashboard add/remove-port) or the cert changes.
+
+The templates no longer handle the WebSocket Upgrade header; the Python
+proxy does that independently. This gives us lower latency and simpler
+nginx configuration.
+"""
+from __future__ import annotations
+
 from pathlib import Path
-from core.shell import Shell
+
+from core.config import (
+    APP_ROOT,
+    DROPBEAR_PORT_DEFAULT,
+    PROXY_PORT_DEFAULT,
+    HTTP_PORTS,
+    HTTPS_PORTS,
+    NGINX_RELAY_NAME,
+    NGINX_SITES_AVAILABLE,
+    NGINX_SITES_ENABLED,
+    state,
+)
+from core.exceptions import ConfigError
 from core.logger import log
-from core.config import state
+from core.shell import Shell
 from features.base import BaseFeature
+
+TEMPLATES_DIR = APP_ROOT / "templates"
+
 
 class NginxRelayFeature(BaseFeature):
     name = "nginx_relay"
-    description = "Nginx Front-End HTTPS TLS Termination & WebSocket Router"
-    # Depends on packages being installed and certificates existing
-    depends_on = ["packages"]
+    description = "Generate the nginx websocket relay (HTTP+HTTPS -> dropbear)"
+    depends_on = ["packages", "dropbear_service", "python_proxy"]
+
+    @property
+    def available_path(self) -> Path:
+        return NGINX_SITES_AVAILABLE / f"{NGINX_RELAY_NAME}.conf"
+
+    @property
+    def enabled_path(self) -> Path:
+        return NGINX_SITES_ENABLED / f"{NGINX_RELAY_NAME}.conf"
 
     def is_installed(self) -> bool:
-        return os.path.exists("/etc/nginx/sites-enabled/sshauto-relay") and \
-               Shell.run("systemctl is-active nginx", check=False).ok
+        return self.enabled_path.exists() or self.enabled_path.is_symlink()
 
     def install(self) -> None:
-        log.info("Configuring Nginx reverse proxy routing rules...")
+        NGINX_SITES_AVAILABLE.mkdir(parents=True, exist_ok=True)
+        NGINX_SITES_ENABLED.mkdir(parents=True, exist_ok=True)
 
-        # Ensure standard default landing pages don't conflict with our setup
-        Shell.run("rm -f /etc/nginx/sites-enabled/default", check=False)
+        self._disable_default_site()
+        config_text = self._render()
+        self.available_path.write_text(config_text)
 
-        # Retrieve the domain from state store or fallback gracefully
-        domain = state.get("cert_domain", "localhost")
-        
-        # Absolute paths where the Certificate Provisioner saves files
-        cert_path = "/var/lib/sshauto/certs/server.crt"
-        key_path = "/var/lib/sshauto/certs/server.key"
+        if not self.enabled_path.exists():
+            Shell.run(f"ln -sf {self.available_path} {self.enabled_path}")
 
-        # Safe fallback validation: Create a dummy path if user hasn't run the cert wizard yet
-        # so Nginx won't throw a fatal parsing crash during startup configuration checks.
-        if not os.path.exists(cert_path) or not os.path.exists(key_path):
-            log.warning("Active SSL certificates not detected yet. Provisioning placeholder self-signed keys...")
-            Path("/var/lib/sshauto/certs").mkdir(parents=True, exist_ok=True)
-            Shell.run(
-                f"openssl req -x509 -nodes -days 7 -newkey rsa:2048 "
-                f"-keyout {key_path} -out {cert_path} -subj '/CN=localhost'",
-                check=True
-            )
-
-        # Define pristine Nginx Virtual Host configuration payload
-        nginx_config = f"""server {{
-    listen 80;
-    listen [::]:80;
-    server_name {domain};
-    
-    # Enforce global redirection from HTTP to HTTPS
-    return 301 https://$host$request_uri;
-}}
-
-server {{
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name {domain};
-
-    # Cloudflare Origin CA Cryptographic Key Pairs
-    ssl_certificate {cert_path};
-    ssl_certificate_key {key_path};
-
-    # Hardened production SSL parameters
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 1d;
-
-    # Core Tunnel Gateway Endpoint
-    location / {{
-        proxy_pass http://127.0.0.1:8000;
-        
-        # Absolute requirement for stable HTTP Upgrade streams
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "Upgrade";
-        
-        # Pass downstream origin identifying headers directly to proxy layer
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # Disable buffers to ensure completely real-time, low-latency SSH interaction
-        proxy_buffering off;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-    }}
-}}
-"""
-
-        # Write out configuration safely
-        config_path = "/etc/nginx/sites-available/sshauto-relay"
-        with open(config_path, "w") as f:
-            f.write(nginx_config)
-
-        # Enable configuration link
-        enabled_link = "/etc/nginx/sites-enabled/sshauto-relay"
-        if not os.path.exists(enabled_link):
-            os.symlink(config_path, enabled_link)
-
-        # Validate syntax cleanly before reloading daemon processes
-        log.info("Testing Nginx configuration structural integrity...")
-        test_res = Shell.run("nginx -t", check=False)
-        if not test_res.ok:
-            raise Exception(f"Nginx configuration verification rejected: {test_res.stderr}")
-
-        # Apply changes live
-        Shell.run("systemctl daemon-reload", check=False)
+        Shell.run("nginx -t")  # validate before touching the live service
         Shell.run("systemctl enable nginx", check=False)
-        Shell.run("systemctl restart nginx", check=True)
-        
-        log.success("Nginx structural reverse-proxy rules successfully deployed and active.")
+        Shell.run("systemctl reload nginx || systemctl restart nginx")
+        log.success(f"nginx relay written to {self.available_path} and reloaded")
 
     def remove(self) -> None:
-        Shell.run("rm -f /etc/nginx/sites-enabled/sshauto-relay", check=False)
-        Shell.run("rm -f /etc/nginx/sites-available/sshauto-relay", check=False)
-        Shell.run("systemctl restart nginx", check=False)
-        log.info("Nginx routing features removed.")
+        Shell.run(f"rm -f {self.enabled_path}", check=False)
+        Shell.run("systemctl reload nginx", check=False)
+
+    def regenerate(self):
+        """Called by the dashboard after ports/cert change."""
+        self.install()
+
+    # -- rendering ------------------------------------------------------
+    def _disable_default_site(self):
+        default_link = NGINX_SITES_ENABLED / "default"
+        if default_link.exists() or default_link.is_symlink():
+            default_link.unlink()
+            log.debug("disabled nginx's default site (would shadow our catch-all)")
+
+    def _render(self) -> str:
+        data = state.ensure_defaults()
+        dropbear_port = data.get("dropbear_port", DROPBEAR_PORT_DEFAULT)
+        proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
+        http_ports = sorted(HTTP_PORTS | set(data.get("custom_http_ports", [])))
+        https_ports = sorted(HTTPS_PORTS | set(data.get("custom_https_ports", [])))
+
+        http_listen_block = "\n".join(f"    listen {p};" for p in http_ports)
+
+        https_server_block = ""
+        cert_path, key_path = self._resolve_cert_paths(data)
+        if cert_path and key_path:
+            https_tpl = (TEMPLATES_DIR / "nginx_relay_https.conf.tpl").read_text()
+            https_listen_block = "\n".join(f"    listen {p} ssl;" for p in https_ports)
+            https_server_block = (
+                https_tpl
+                .replace("@HTTPS_LISTEN_BLOCK@", https_listen_block)
+                .replace("@CERT_PATH@", cert_path)
+                .replace("@KEY_PATH@", key_path)
+                .replace("@PROXY_PORT@", str(proxy_port))
+            )
+        else:
+            log.warning("no certificate configured yet — HTTPS relay ports "
+                        "will not be enabled until `sshauto cert` runs")
+
+        base_tpl_path = TEMPLATES_DIR / "nginx_relay.conf.tpl"
+        if not base_tpl_path.exists():
+            raise ConfigError(f"missing template {base_tpl_path}")
+
+        return (
+            base_tpl_path.read_text()
+            .replace("@HTTP_LISTEN_BLOCK@", http_listen_block)
+            .replace("@PROXY_PORT@", str(proxy_port))
+            .replace("@HTTPS_SERVER_BLOCK@", https_server_block)
+        )
+
+    def _resolve_cert_paths(self, data: dict) -> tuple[str | None, str | None]:
+        cert_path = data.get("cert_fullchain_path")
+        key_path = data.get("cert_key_path")
+        if cert_path and key_path and Path(cert_path).exists() and Path(key_path).exists():
+            return cert_path, key_path
+        return None, None
