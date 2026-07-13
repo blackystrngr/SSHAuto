@@ -21,7 +21,7 @@ class PythonProxyFeature(BaseFeature):
         proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
         dropbear_port = data.get("dropbear_port", 110)
 
-        # Exactly the proxy code from 4th.py
+        # Optimised proxy code – larger read size, bigger socket buffers
         proxy_code = f'''#!/usr/bin/env python3
 import asyncio
 import socket
@@ -32,6 +32,8 @@ async def force_upgrade_and_bridge(reader, writer):
     sock = writer.get_extra_info('socket')
     if sock is not None:
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
 
     while True:
         line = await reader.readline()
@@ -53,11 +55,13 @@ async def force_upgrade_and_bridge(reader, writer):
     ssh_sock = ssh_writer.get_extra_info('socket')
     if ssh_sock is not None:
         ssh_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
+        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
 
     async def client_to_ssh():
         try:
             while True:
-                data = await reader.read(4096)
+                data = await reader.read(16384)   # was 4096
                 if not data:
                     break
                 ssh_writer.write(data)
@@ -70,7 +74,7 @@ async def force_upgrade_and_bridge(reader, writer):
     async def ssh_to_client():
         try:
             while True:
-                data = await ssh_reader.read(4096)
+                data = await ssh_reader.read(16384)  # was 4096
                 if not data:
                     break
                 writer.write(data)
@@ -85,15 +89,15 @@ async def force_upgrade_and_bridge(reader, writer):
 async def main():
     server = await asyncio.start_server(
         force_upgrade_and_bridge, '127.0.0.1', {proxy_port},
-        backlog=128,
+        backlog=256,          # was 128
         reuse_address=True,
     )
     for s in server.sockets:
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
-            ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
         except:
             pass
 
@@ -106,7 +110,6 @@ if __name__ == '__main__':
         PROXY_BIN.write_text(proxy_code)
         PROXY_BIN.chmod(0o755)
 
-        # Systemd service – identical to script
         service = f"""[Unit]
 Description=Forced-Upgrade TCP Proxy to SSH (Low Latency)
 After=network.target
@@ -129,7 +132,7 @@ WantedBy=multi-user.target
 
         if not self.is_installed():
             raise Exception("Proxy failed to start.")
-        log.success("Python Proxy installed (script‑compatible).")
+        log.success("Python Proxy installed (optimised: 16KB buffers, 256 backlog).")
 
     def remove(self) -> None:
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False)
