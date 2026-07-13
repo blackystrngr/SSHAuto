@@ -1,7 +1,5 @@
 """
-fail2ban protects both the direct OpenSSH port and the websocket relay
-path. Dropbear needs a small custom filter since fail2ban doesn't ship
-one out of the box on most distros.
+fail2ban protects both the direct OpenSSH port and the websocket relay.
 """
 from __future__ import annotations
 
