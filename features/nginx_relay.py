@@ -45,8 +45,14 @@ class NginxRelayFeature(BaseFeature):
 
         Shell.run("nginx -t")
         Shell.run("systemctl enable nginx", check=False)
-        Shell.run("systemctl reload nginx || systemctl restart nginx")
-        log.success(f"nginx config written to {self.available_path}")
+
+        # Force reload to apply changes (important for freeing port 443)
+        reload_result = Shell.run("systemctl reload nginx", check=False, timeout=10)
+        if not reload_result.ok:
+            log.warning("nginx reload failed; restarting instead.")
+            Shell.run("systemctl restart nginx", check=False, timeout=10)
+
+        log.success(f"nginx config written to {self.available_path} and reloaded")
 
     def remove(self) -> None:
         Shell.run(f"rm -f {self.enabled_path}", check=False)
