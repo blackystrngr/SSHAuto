@@ -1,18 +1,10 @@
 # ============================================================
-#  Managed by sshauto – split traffic: WebSocket → Python proxy,
-#  plain HTTP → Squid proxy.
+#  Managed by sshauto – WebSocket relay (HTTP+HTTPS)
 # ============================================================
 
-# Map Upgrade header to backend address
-map $http_upgrade $backend {
-    default "http://127.0.0.1:3128";
-    websocket "http://127.0.0.1:@PROXY_PORT@";
-}
-
-# Map Upgrade header to Connection header value
 map $http_upgrade $connection_upgrade {
-    default "";
-    websocket "upgrade";
+    default upgrade;
+    ''      close;
 }
 
 server {
@@ -25,7 +17,7 @@ server {
     client_max_body_size 0;
 
     location / {
-        proxy_pass $backend;
+        proxy_pass http://127.0.0.1:@PROXY_PORT@;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
@@ -38,6 +30,7 @@ server {
         proxy_read_timeout 86400s;
         proxy_send_timeout 86400s;
         proxy_connect_timeout 10s;
+        tcp_nodelay on;
     }
 }
 
