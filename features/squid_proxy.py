@@ -36,17 +36,31 @@ request_header_access X-Forwarded-For deny all
         SQUID_CONF.write_text(config)
         log.info("Squid configured: listening on 127.0.0.1:3128.")
 
-        # Enable and start with retry
-        Shell.run("systemctl enable squid", check=False)
-        for attempt in range(3):
-            result = Shell.run("systemctl restart squid", check=False, timeout=10)
-            if result.ok:
-                break
-            time.sleep(1)
-        else:
-            log.warning("Squid service did not start cleanly. Check logs with 'journalctl -u squid'.")
+        # Test configuration
+        test_result = Shell.run("squid -k parse", check=False, timeout=10)
+        if not test_result.ok:
+            log.error(f"Squid config test failed: {test_result.stderr}")
+            raise Exception("Squid configuration is invalid.")
 
-        log.success("Squid proxy installed (loopback only). Nginx routes plain HTTP to it.")
+        # Reset failed state and start
+        Shell.run("systemctl reset-failed squid", check=False)
+        Shell.run("systemctl enable squid", check=False)
+
+        # Start with longer timeout
+        start_result = Shell.run("systemctl start squid", check=False, timeout=30)
+        if not start_result.ok:
+            log.warning(f"Squid start failed (exit {start_result.returncode}): {start_result.stderr}")
+            log.info("Attempting to restart with fallback...")
+            # Try restart with even longer timeout
+            Shell.run("systemctl restart squid", check=False, timeout=30)
+
+        # Final verification
+        time.sleep(2)
+        if Shell.run("systemctl is-active squid", check=False).ok:
+            log.success("Squid proxy installed and running.")
+        else:
+            log.warning("Squid service is not active. Check logs with 'journalctl -u squid'.")
+
         log.important("Now all public HTTP ports (80, 8080, 8880, etc.) accept both WebSocket and plain HTTP.")
 
     def remove(self) -> None:
