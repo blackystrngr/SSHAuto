@@ -1,3 +1,8 @@
+"""
+Builds /etc/nginx/sites-available/ssh_tunnel and symlinks it.
+Splits traffic: WebSocket → Python proxy, plain HTTP → Squid proxy.
+HTTPS is handled by nginx on specified ports; if sslh is installed, port 443 is removed.
+"""
 from pathlib import Path
 from core.config import (
     APP_ROOT, PROXY_PORT_DEFAULT, HTTP_PORTS, HTTPS_PORTS,
@@ -13,6 +18,7 @@ NGINX_SITE_NAME = "ssh_tunnel"
 
 class NginxRelayFeature(BaseFeature):
     name = "nginx_relay"
+    description = "Generate the nginx websocket relay (HTTP+HTTPS -> dropbear/squid)"
     depends_on = ["packages", "dropbear_service", "python_proxy"]
 
     @property
@@ -43,10 +49,10 @@ class NginxRelayFeature(BaseFeature):
         if not self.enabled_path.exists():
             Shell.run(f"ln -sf {self.available_path} {self.enabled_path}")
 
+        # Test and reload nginx
         Shell.run("nginx -t")
         Shell.run("systemctl enable nginx", check=False)
 
-        # Force reload to apply changes (important for freeing port 443)
         reload_result = Shell.run("systemctl reload nginx", check=False, timeout=10)
         if not reload_result.ok:
             log.warning("nginx reload failed; restarting instead.")
@@ -74,8 +80,8 @@ class NginxRelayFeature(BaseFeature):
         http_ports = sorted(HTTP_PORTS | set(data.get("custom_http_ports", [])))
         https_ports = sorted(HTTPS_PORTS | set(data.get("custom_https_ports", [])))
 
-        # If sslh is installed, remove port 443 from nginx HTTPS list
-        if Path("/etc/default/sslh").exists():
+        # Detect sslh installation – if present, remove port 443 from nginx
+        if Path("/etc/sslh.cfg").exists() or Path("/etc/sslh/sslh.conf").exists():
             if 443 in https_ports:
                 https_ports.remove(443)
                 log.debug("sslh detected – nginx will not listen on 443.")
