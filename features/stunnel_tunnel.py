@@ -13,7 +13,7 @@ STUNNEL_CERT = Path("/etc/stunnel/stunnel.pem")
 class StunnelTunnelFeature(BaseFeature):
     name = "stunnel_tunnel"
     description = f"SSL tunnel (stunnel) on 127.0.0.1:{STUNNEL_PORT} forwarding to Dropbear"
-    depends_on = ["packages", "dropbear_service"]  # dropbear must be running
+    depends_on = ["packages", "dropbear_service"]
 
     def is_installed(self) -> bool:
         return STUNNEL_CONF.exists() and Shell.run("systemctl is-active stunnel4", check=False).ok
@@ -21,7 +21,23 @@ class StunnelTunnelFeature(BaseFeature):
     def install(self) -> None:
         log.info("Installing stunnel SSL tunnel...")
 
-        Shell.run("apt-get install -y stunnel4", check=True)
+        # Check if stunnel4 is already installed
+        if not Shell.run("which stunnel4", check=False).ok:
+            log.info("stunnel4 not found, installing...")
+            # Attempt install with retry on lock
+            for attempt in range(3):
+                result = Shell.run("apt-get install -y stunnel4", check=False, timeout=30)
+                if result.ok:
+                    break
+                if "Could not get lock" in result.stderr:
+                    log.warning("apt-get locked, waiting 5s...")
+                    time.sleep(5)
+                else:
+                    raise Exception(f"Failed to install stunnel4: {result.stderr}")
+            else:
+                raise Exception("Failed to install stunnel4 after retries.")
+        else:
+            log.info("stunnel4 already installed.")
 
         data = state.ensure_defaults()
         dropbear_port = data.get("dropbear_port", DROPBEAR_PORT_DEFAULT)
