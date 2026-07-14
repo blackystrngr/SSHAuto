@@ -1,6 +1,15 @@
 # ============================================================
-#  Managed by sshauto – optimised for speed
+#  Managed by sshauto – split traffic: WebSocket → Python proxy,
+#  plain HTTP → Squid proxy.
 # ============================================================
+
+upstream python_backend {
+    server 127.0.0.1:@PROXY_PORT@;
+}
+
+upstream squid_backend {
+    server 127.0.0.1:3128;
+}
 
 server {
 @HTTP_LISTEN_BLOCK@
@@ -11,22 +20,26 @@ server {
     client_body_timeout 86400s;
     client_max_body_size 0;
 
-    # Buffer tuning for large file transfers
-    proxy_buffer_size 128k;
-    proxy_buffers 4 256k;
-    proxy_busy_buffers_size 256k;
-
     location / {
-        proxy_pass http://127.0.0.1:@PROXY_PORT@;
+        # If Upgrade: websocket, go to Python proxy, else to Squid
+        if ($http_upgrade = "websocket") {
+            proxy_pass http://python_backend;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            break;
+        }
+        proxy_pass http://squid_backend;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-
-        proxy_buffering off;
-        proxy_request_buffering off;
-        proxy_read_timeout 86400s;
-        proxy_send_timeout 86400s;
-        proxy_connect_timeout 10s;
     }
+
+    # Common settings for both backends
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_read_timeout 86400s;
+    proxy_send_timeout 86400s;
+    proxy_connect_timeout 10s;
 }
 
 @HTTPS_SERVER_BLOCK@
