@@ -9,7 +9,7 @@ from core.shell import Shell
 from features.base import BaseFeature
 
 TEMPLATES_DIR = APP_ROOT / "templates"
-NGINX_SITE_NAME = "ssh_tunnel"   # matches script
+NGINX_SITE_NAME = "ssh_tunnel"
 
 class NginxRelayFeature(BaseFeature):
     name = "nginx_relay"
@@ -68,7 +68,12 @@ class NginxRelayFeature(BaseFeature):
         http_ports = sorted(HTTP_PORTS | set(data.get("custom_http_ports", [])))
         https_ports = sorted(HTTPS_PORTS | set(data.get("custom_https_ports", [])))
 
-        # Use 0.0.0.0:port to match script exactly
+        # If sslh is installed, remove port 443 from nginx HTTPS list
+        if Path("/etc/default/sslh").exists():
+            if 443 in https_ports:
+                https_ports.remove(443)
+                log.debug("sslh detected – nginx will not listen on 443.")
+
         http_listen = "\n".join(f"    listen 0.0.0.0:{p};" for p in http_ports)
 
         https_block = ""
