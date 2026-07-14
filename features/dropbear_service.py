@@ -10,7 +10,7 @@ class DropbearServiceFeature(BaseFeature):
     depends_on = ["packages"]
 
     def is_installed(self) -> bool:
-        return DROPBEAR_DEFAULTS_FILE.exists() and "NO_START=0" in DROPBEAR_DEFAULTS_FILE.read_text()
+        return Path("/etc/systemd/system/dropbear-tunnel.service").exists()
 
     def install(self) -> None:
         data = state.ensure_defaults()
@@ -49,12 +49,10 @@ WantedBy=multi-user.target
         service_path.write_text(service_content)
         log.info("Created systemd unit: dropbear-tunnel.service")
 
-        # Enable and start – with timeout
         Shell.run("systemctl daemon-reload", timeout=10)
         Shell.run("systemctl enable dropbear-tunnel", check=False, timeout=10)
         Shell.run("systemctl restart dropbear-tunnel", check=False, timeout=10)
 
-        # Verify binding
         self._verify_binding(port)
 
     def remove(self) -> None:
