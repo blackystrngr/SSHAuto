@@ -7,20 +7,18 @@ class FirewallFeature(BaseFeature):
     depends_on = ["packages"]
 
     def is_installed(self) -> bool:
-        # Always report as not installed so we always flush on install
         return False
 
     def install(self) -> None:
-        log.info("Flushing iptables rules (script‑compatible – no restrictions)...")
+        log.info("Flushing iptables and allowing all traffic.")
         for table in ["", "-t nat", "-t mangle"]:
             Shell.run(f"iptables {table} -F", check=False)
             Shell.run(f"iptables {table} -X", check=False)
-        # Set default policies to ACCEPT
         Shell.run("iptables -P INPUT ACCEPT", check=False)
         Shell.run("iptables -P FORWARD ACCEPT", check=False)
         Shell.run("iptables -P OUTPUT ACCEPT", check=False)
-        log.success("Firewall flushed – all traffic allowed (like standalone script).")
+        log.success("Firewall: all traffic allowed.")
+        log.important("Open UDP 7300, TCP 80, 443, 8443, 3128, 4443 in cloud console if needed.")
 
     def remove(self) -> None:
-        # Same as install – just flush
         self.install()
