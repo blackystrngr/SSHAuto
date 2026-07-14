@@ -4,6 +4,7 @@ from pathlib import Path
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
+import time
 
 SQUID_CONF = Path("/etc/squid/squid.conf")
 
@@ -11,7 +12,7 @@ SQUID_CONF = Path("/etc/squid/squid.conf")
 class SquidProxyFeature(BaseFeature):
     name = "squid_proxy"
     description = "Install Squid proxy (listens on 127.0.0.1:3128)"
-    depends_on = ["packages", "firewall"]
+    depends_on = ["packages", "firewall", "nginx_relay"]  # ensure nginx config is ready
 
     def is_installed(self) -> bool:
         return SQUID_CONF.exists() and Shell.run("systemctl is-active squid", check=False).ok
@@ -35,8 +36,15 @@ request_header_access X-Forwarded-For deny all
         SQUID_CONF.write_text(config)
         log.info("Squid configured: listening on 127.0.0.1:3128.")
 
+        # Enable and start with retry
         Shell.run("systemctl enable squid", check=False)
-        Shell.run("systemctl restart squid", check=True)
+        for attempt in range(3):
+            result = Shell.run("systemctl restart squid", check=False, timeout=10)
+            if result.ok:
+                break
+            time.sleep(1)
+        else:
+            log.warning("Squid service did not start cleanly. Check logs with 'journalctl -u squid'.")
 
         log.success("Squid proxy installed (loopback only). Nginx routes plain HTTP to it.")
         log.important("Now all public HTTP ports (80, 8080, 8880, etc.) accept both WebSocket and plain HTTP.")
