@@ -1,8 +1,3 @@
-"""
-Builds /etc/nginx/sites-available/ssh_tunnel and symlinks it.
-Splits traffic: WebSocket → Python proxy, plain HTTP → Squid proxy.
-HTTPS is handled by nginx on specified ports; if sslh is installed, port 443 is removed.
-"""
 from pathlib import Path
 from core.config import (
     APP_ROOT, PROXY_PORT_DEFAULT, HTTP_PORTS, HTTPS_PORTS,
@@ -14,20 +9,21 @@ from core.shell import Shell
 from features.base import BaseFeature
 
 TEMPLATES_DIR = APP_ROOT / "templates"
-NGINX_SITE_NAME = "ssh_tunnel"
+NGINX_SITE_NAME = "sshauto-relay"
+
 
 class NginxRelayFeature(BaseFeature):
     name = "nginx_relay"
-    description = "Generate the nginx websocket relay (HTTP+HTTPS -> dropbear/squid)"
+    description = "Generate the nginx WebSocket relay (HTTP+HTTPS)"
     depends_on = ["packages", "dropbear_service", "python_proxy"]
 
     @property
     def available_path(self) -> Path:
-        return NGINX_SITES_AVAILABLE / NGINX_SITE_NAME
+        return NGINX_SITES_AVAILABLE / f"{NGINX_SITE_NAME}.conf"
 
     @property
     def enabled_path(self) -> Path:
-        return NGINX_SITES_ENABLED / NGINX_SITE_NAME
+        return NGINX_SITES_ENABLED / f"{NGINX_SITE_NAME}.conf"
 
     def is_installed(self) -> bool:
         return self.enabled_path.exists() or self.enabled_path.is_symlink()
@@ -36,12 +32,6 @@ class NginxRelayFeature(BaseFeature):
         NGINX_SITES_AVAILABLE.mkdir(parents=True, exist_ok=True)
         NGINX_SITES_ENABLED.mkdir(parents=True, exist_ok=True)
 
-        # Remove old sshauto‑relay to avoid conflict
-        old_avail = NGINX_SITES_AVAILABLE / "sshauto-relay.conf"
-        old_enabled = NGINX_SITES_ENABLED / "sshauto-relay.conf"
-        old_avail.unlink(missing_ok=True)
-        old_enabled.unlink(missing_ok=True)
-
         self._disable_default_site()
         config_text = self._render()
         self.available_path.write_text(config_text)
@@ -49,7 +39,6 @@ class NginxRelayFeature(BaseFeature):
         if not self.enabled_path.exists():
             Shell.run(f"ln -sf {self.available_path} {self.enabled_path}")
 
-        # Test and reload nginx
         Shell.run("nginx -t")
         Shell.run("systemctl enable nginx", check=False)
 
@@ -58,7 +47,7 @@ class NginxRelayFeature(BaseFeature):
             log.warning("nginx reload failed; restarting instead.")
             Shell.run("systemctl restart nginx", check=False, timeout=10)
 
-        log.success(f"nginx config written to {self.available_path} and reloaded")
+        log.success(f"nginx WebSocket relay written to {self.available_path}")
 
     def remove(self) -> None:
         Shell.run(f"rm -f {self.enabled_path}", check=False)
@@ -80,7 +69,7 @@ class NginxRelayFeature(BaseFeature):
         http_ports = sorted(HTTP_PORTS | set(data.get("custom_http_ports", [])))
         https_ports = sorted(HTTPS_PORTS | set(data.get("custom_https_ports", [])))
 
-        # Detect sslh installation – if present, remove port 443 from nginx
+        # If sslh is installed, remove port 443 from nginx HTTPS list
         if Path("/etc/sslh.cfg").exists() or Path("/etc/sslh/sslh.conf").exists():
             if 443 in https_ports:
                 https_ports.remove(443)
@@ -101,7 +90,7 @@ class NginxRelayFeature(BaseFeature):
                 .replace("@PROXY_PORT@", str(proxy_port))
                 .replace("@DOMAIN@", domain)
             )
-            log.info(f"HTTPS enabled with cert {cert_path}")
+            log.info(f"HTTPS block enabled with cert {cert_path}")
         else:
             log.warning("No certificate found – HTTPS disabled.")
 
@@ -118,13 +107,11 @@ class NginxRelayFeature(BaseFeature):
         )
 
     def _resolve_cert_paths(self, data):
-        # Try state first
         cert = data.get("cert_fullchain_path")
         key = data.get("cert_key_path")
         if cert and key and Path(cert).exists() and Path(key).exists():
             return cert, key
 
-        # Check script's self‑signed location
         script_cert = Path("/etc/ssl/certs/selfsigned.crt")
         script_key = Path("/etc/ssl/private/selfsigned.key")
         if script_cert.exists() and script_key.exists():
@@ -133,7 +120,6 @@ class NginxRelayFeature(BaseFeature):
             state.save(data)
             return str(script_cert), str(script_key)
 
-        # Look in common locations
         from core.config import LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR
         for base in [LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR, Path("/etc/ssl/cloudflare")]:
             if not base.exists():
