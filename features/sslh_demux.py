@@ -26,6 +26,14 @@ class SslhDemuxFeature(BaseFeature):
     def install(self) -> None:
         log.info(f"Installing sslh TLS demuxer on port {SSLH_PORT}...")
 
+        # Before installing sslh, ensure nginx is reconfigured to not use port 443
+        log.info("Reconfiguring nginx to release port 443...")
+        try:
+            from features.nginx_relay import NginxRelayFeature
+            NginxRelayFeature().regenerate()
+        except Exception as e:
+            log.warning(f"Failed to regenerate nginx config: {e}")
+
         Shell.run("apt-get install -y sslh", check=True)
 
         config = f"""
@@ -36,11 +44,20 @@ DAEMON_OPTS="--user sslh --listen 0.0.0.0:{SSLH_PORT} --ssl 127.0.0.1:{NGINX_SSL
         SSLH_CONF.write_text(config)
         log.info(f"sslh configured: HTTPS → {NGINX_SSL_PORT}, raw SSL → {STUNNEL_PORT}.")
 
+        # Ensure stunnel is running (depends on dropbear)
+        Shell.run("systemctl restart stunnel4", check=False, timeout=10)
+
         Shell.run("systemctl reset-failed sslh", check=False)
         Shell.run("systemctl enable sslh", check=False)
+        # Start with longer timeout
         start_result = Shell.run("systemctl start sslh", check=False, timeout=30)
         if not start_result.ok:
-            log.warning(f"sslh start failed (exit {start_result.returncode}). Trying restart.")
+            log.warning(f"sslh start failed (exit {start_result.returncode}): {start_result.stderr}")
+            # Check if port 443 is still in use
+            port_check = Shell.run("ss -lpn | grep ':443 '", check=False)
+            if port_check.ok:
+                log.error("Port 443 is still in use! nginx may still be listening on 443.")
+                log.info("Try manually stopping nginx and restarting sslh: systemctl stop nginx; systemctl start sslh")
             Shell.run("systemctl restart sslh", check=False, timeout=30)
 
         time.sleep(2)
