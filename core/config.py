@@ -16,6 +16,7 @@ from pathlib import Path
 # ----------------------------------------------------------------------
 HTTP_PORTS = {80, 8080, 8880, 2052, 2082, 2086, 2095}
 HTTPS_PORTS = {443, 8443, 2053, 2083, 2087, 2096}
+SQUID_PORT_DEFAULT = 3128
 
 SSH_PORT_DEFAULT = 22                 # real OpenSSH, direct access
 DROPBEAR_PORT_DEFAULT = 110           # dropbear tunnel backend
