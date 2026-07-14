@@ -11,6 +11,7 @@ from core.config import state
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
+import time
 
 SSLH_CONF = Path("/etc/default/sslh")
 SSLH_PORT = 443
@@ -21,7 +22,7 @@ STUNNEL_PORT = 4443
 class SslhDemuxFeature(BaseFeature):
     name = "sslh_demux"
     description = f"Install sslh: TLS demuxer on port {SSLH_PORT} (nginx on {NGINX_SSL_PORT}, stunnel on {STUNNEL_PORT})"
-    depends_on = ["packages", "nginx_relay", "stunnel_tunnel"]
+    depends_on = ["packages", "nginx_relay", "stunnel_tunnel"]  # nginx must be reconfigured first
 
     def is_installed(self) -> bool:
         return SSLH_CONF.exists() and Shell.run("systemctl is-active sslh", check=False).ok
@@ -40,8 +41,15 @@ DAEMON_OPTS="--user sslh --listen 0.0.0.0:{SSLH_PORT} --ssl 127.0.0.1:{NGINX_SSL
         SSLH_CONF.write_text(config)
         log.info(f"sslh configured: HTTPS → {NGINX_SSL_PORT}, raw SSL → {STUNNEL_PORT}.")
 
+        # Enable and start with retry
         Shell.run("systemctl enable sslh", check=False)
-        Shell.run("systemctl restart sslh", check=True)
+        for attempt in range(3):
+            result = Shell.run("systemctl restart sslh", check=False, timeout=10)
+            if result.ok:
+                break
+            time.sleep(1)
+        else:
+            log.warning("sslh service did not start cleanly. Check logs with 'journalctl -u sslh'.")
 
         log.success(f"TLS demuxer active on port {SSLH_PORT}.")
         log.important("Nginx now listens on port 8443 for HTTPS (and any other HTTPS_PORTS except 443).")
