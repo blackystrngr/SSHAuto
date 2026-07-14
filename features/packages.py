@@ -48,7 +48,7 @@ class PackagesFeature(BaseFeature):
         # spot-check a representative subset rather than every package,
         # so a partial re-run doesn't look "not installed" for no reason
         return ["nginx", "dropbear", "openssh-server", "fail2ban",
-                "certbot", "python3", "iptables", "git"]
+                "certbot", "python3", "iptables", "git", "squid"]
 
     def _dpkg_installed(self, pkg: str) -> bool:
         result = Shell.run(f"dpkg -s {pkg}", check=False)
