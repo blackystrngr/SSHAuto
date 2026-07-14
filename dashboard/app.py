@@ -1,9 +1,10 @@
 """
 The interactive dashboard, launched by typing `kk` at the shell.
+Now with extra services (Squid, stunnel, sslh, UDPGW) status.
 """
 from __future__ import annotations
 
-from core.config import state
+from core.config import state, HTTP_PORTS, HTTPS_PORTS
 from core.exceptions import SSHAutoError
 from core.logger import log
 from dashboard import ui
@@ -47,6 +48,7 @@ class Dashboard:
             ("8", "Show active ports"),
             ("9", "Server status (services)"),
             ("10", "Network Optimizer & BBR Menu"),
+            ("11", "Extra Services (Squid, stunnel, sslh, UDPGW)"),
             ("0", "Exit"),
         ])
 
@@ -62,6 +64,7 @@ class Dashboard:
             "8": self._show_ports,
             "9": self._service_status,
             "10": self._manage_network_optimizer,
+            "11": self._extra_services_status,
         }
         action = actions.get(choice)
         if not action:
@@ -78,6 +81,7 @@ class Dashboard:
             pass
         ui.pause()
 
+    # -- existing actions (unchanged) -------------------------------------
     def _create_user(self):
         ui.clear()
         ui.header("create user")
@@ -141,6 +145,9 @@ class Dashboard:
         data = state.load()
         ui.kv_row("Dropbear backend", f"127.0.0.1:{data.get('dropbear_port')}")
         ui.kv_row("SSH direct port", str(data.get("ssh_port")))
+        ui.kv_row("Squid proxy", "127.0.0.1:3128")
+        ui.kv_row("stunnel (internal)", "127.0.0.1:4443")
+        ui.kv_row("UDP Gateway", "0.0.0.0:7300 (public)")
 
     def _service_status(self):
         ui.clear()
@@ -198,6 +205,48 @@ class Dashboard:
                 except Exception as e:
                     log.error(f"Error during rollback: {e}")
                     ui.prompt("\nPress Enter to continue...")
+
+    # -- NEW: Extra Services Status -----------------------------------------
+    def _extra_services_status(self):
+        ui.clear()
+        ui.header("Extra Services Overview", "Squid, stunnel, sslh, UDPGW")
+
+        from core.shell import Shell
+        from pathlib import Path
+
+        # Squid
+        squid_active = Shell.run("systemctl is-active squid", check=False).ok
+        squid_installed = Path("/etc/squid/squid.conf").exists()
+        ui.kv_row("Squid HTTP Proxy",
+                  f"{'✅ ACTIVE' if squid_active else '❌ INACTIVE'} (port 3128 internal)",
+                  color="\033[1;32m" if squid_active else "\033[1;31m")
+
+        # stunnel
+        stunnel_active = Shell.run("systemctl is-active stunnel4", check=False).ok
+        stunnel_installed = Path("/etc/stunnel/stunnel.conf").exists()
+        ui.kv_row("stunnel SSL Tunnel",
+                  f"{'✅ ACTIVE' if stunnel_active else '❌ INACTIVE'} (port 4443 internal)",
+                  color="\033[1;32m" if stunnel_active else "\033[1;31m")
+
+        # sslh
+        sslh_active = Shell.run("systemctl is-active sslh", check=False).ok
+        sslh_installed = Path("/etc/default/sslh").exists()
+        ui.kv_row("sslh TLS Demuxer",
+                  f"{'✅ ACTIVE' if sslh_active else '❌ INACTIVE'} (port 443)",
+                  color="\033[1;32m" if sslh_active else "\033[1;31m")
+
+        # UDPGW
+        udpgw_active = Shell.run("systemctl is-active badvpn-udpgw", check=False).ok
+        udpgw_installed = Path("/usr/local/bin/badvpn-udpgw").exists()
+        ui.kv_row("badvpn-udpgw (UDP)",
+                  f"{'✅ ACTIVE' if udpgw_active else '❌ INACTIVE'} (port 7300 public)",
+                  color="\033[1;32m" if udpgw_active else "\033[1;31m")
+
+        print()
+        ui.kv_row("Port 443", "sslh forwards → nginx:8443 (HTTPS/WS) and stunnel:4443 (raw SSL)")
+        ui.kv_row("Port 80/8080/8880", "nginx splits → WebSocket (Python proxy) and plain HTTP (Squid)")
+        print()
+        log.important("Use 'sudo python3 main.py install --only <feature>' to enable/disable individual services.")
 
     def _safe_live_stats(self):
         try:
