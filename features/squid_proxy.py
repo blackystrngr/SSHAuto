@@ -45,38 +45,38 @@ request_header_access X-Forwarded-For deny all
         SQUID_CONF.write_text(config)
         log.info("Squid configured: listening on 0.0.0.0:3128 (public).")
 
-        # Test configuration
+        # Validate configuration
         test_result = Shell.run("squid -k parse", check=False, timeout=10)
         if not test_result.ok:
             log.error(f"Squid config test failed: {test_result.stderr}")
             raise Exception("Squid configuration is invalid.")
 
-        # Stop any existing instance, reset, and start with longer timeout
-        Shell.run("systemctl stop squid", check=False, timeout=10)
+        # Reset failed state
         Shell.run("systemctl reset-failed squid", check=False)
         Shell.run("systemctl enable squid", check=False)
 
-        # Start with 60s timeout
-        start_result = Shell.run("systemctl start squid", check=False, timeout=60)
-        if not start_result.ok:
-            log.error(f"Squid start failed (exit {start_result.returncode}): {start_result.stderr}")
-            # Try restart as fallback
-            log.info("Attempting restart as fallback...")
-            Shell.run("systemctl restart squid", check=False, timeout=60)
+        # Restart with a generous timeout (handles both stop and start)
+        restart_result = Shell.run("systemctl restart squid", check=False, timeout=90)
+        if not restart_result.ok:
+            log.warning(f"Squid restart returned exit {restart_result.returncode}. Trying start directly...")
+            # Fallback: try start without restart
+            Shell.run("systemctl start squid", check=False, timeout=60)
 
-        time.sleep(3)
+        time.sleep(2)
+
+        # Final verification
         if Shell.run("systemctl is-active squid", check=False).ok:
             log.success("Squid proxy installed and running on port 3128.")
         else:
             log.warning("Squid service is not active. Check logs with 'journalctl -u squid'.")
-            # Show last few lines of log
+            # Show last few lines
             Shell.run("journalctl -u squid --no-pager -n 10", check=False)
 
         log.important("Squid is now available as a forward proxy on port 3128.")
         log.important("Existing WebSocket relay on ports 80, 8080, 8880 remains unchanged.")
 
     def remove(self) -> None:
-        Shell.run("systemctl stop squid", check=False)
+        Shell.run("systemctl stop squid", check=False, timeout=30)
         Shell.run("systemctl disable squid", check=False)
         SQUID_CONF.unlink(missing_ok=True)
         log.info("Squid removed.")
