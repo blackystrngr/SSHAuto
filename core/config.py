@@ -1,3 +1,19 @@
+"""
+Single source of truth for every constant used across the project, plus
+a tiny JSON-backed StateStore so features/dashboard can persist things
+(current dropbear port, custom ports, chosen cert strategy, domain...)
+without a database.
+"""
+from __future__ import annotations
+
+import json
+import os
+import threading
+from pathlib import Path
+
+# ----------------------------------------------------------------------
+# Network layout
+# ----------------------------------------------------------------------
 HTTP_PORTS = {80, 8080, 8880, 2052, 2082, 2086, 2095}
 HTTPS_PORTS = {443, 8443, 2053, 2083, 2087, 2096}   # 443 is handled by sslh if installed
 
@@ -14,6 +30,7 @@ GIT_POLL_INTERVAL_SECONDS = 30
 REQUIRED_PACKAGES = ["nginx", "dropbear", "fail2ban", "iptables", "curl", "git", "certbot", "squid", "stunnel4", "sslh"]
 REMOVE_PACKAGES = ["apache2", "ufw", "firewalld"]
 PIP_PACKAGES = []
+
 
 # ----------------------------------------------------------------------
 # Filesystem paths
