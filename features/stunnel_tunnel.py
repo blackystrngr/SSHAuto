@@ -3,6 +3,7 @@ from core.config import state, DROPBEAR_PORT_DEFAULT
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
+import time
 
 STUNNEL_CONF = Path("/etc/stunnel/stunnel.conf")
 STUNNEL_PORT = 4443
@@ -12,7 +13,7 @@ STUNNEL_CERT = Path("/etc/stunnel/stunnel.pem")
 class StunnelTunnelFeature(BaseFeature):
     name = "stunnel_tunnel"
     description = f"SSL tunnel (stunnel) on 127.0.0.1:{STUNNEL_PORT} forwarding to Dropbear"
-    depends_on = ["packages", "dropbear_service"]
+    depends_on = ["packages", "dropbear_service"]  # dropbear must be running
 
     def is_installed(self) -> bool:
         return STUNNEL_CONF.exists() and Shell.run("systemctl is-active stunnel4", check=False).ok
@@ -49,7 +50,13 @@ client = no
         log.info(f"Stunnel configured: listening on 127.0.0.1:{STUNNEL_PORT} (internal).")
 
         Shell.run("systemctl enable stunnel4", check=False)
-        Shell.run("systemctl restart stunnel4", check=True)
+        for attempt in range(3):
+            result = Shell.run("systemctl restart stunnel4", check=False, timeout=10)
+            if result.ok:
+                break
+            time.sleep(1)
+        else:
+            log.warning("stunnel service did not start cleanly. Check logs with 'journalctl -u stunnel4'.")
 
         log.success("Stunnel tunnel ready (internal).")
 
