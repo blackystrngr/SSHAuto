@@ -40,7 +40,14 @@ DAEMON_OPTS="--user sslh --listen 0.0.0.0:{SSLH_PORT} --ssl 127.0.0.1:{NGINX_SSL
         SSLH_CONF.write_text(config)
         log.info(f"sslh configured: HTTPS → {NGINX_SSL_PORT}, raw SSL → {STUNNEL_PORT}.")
 
-        # Force nginx to reload (it should have already been reconfigured)
+        # Test sslh config (optional)
+        config_test = Shell.run("sslh -t -c /dev/stdin", check=False, input_text=config, timeout=10)
+        if config_test.ok:
+            log.debug("sslh config test passed.")
+        else:
+            log.warning("sslh config test failed, but continuing.")
+
+        # Force nginx reload to free port 443
         log.info("Reloading nginx to free port 443...")
         Shell.run("systemctl reload nginx", check=False, timeout=10)
         time.sleep(2)
@@ -71,7 +78,16 @@ DAEMON_OPTS="--user sslh --listen 0.0.0.0:{SSLH_PORT} --ssl 127.0.0.1:{NGINX_SSL
             time.sleep(2)
 
         if success:
-            log.success(f"TLS demuxer active on port {SSLH_PORT}.")
+            # Double-check with is-active
+            time.sleep(1)
+            if Shell.run("systemctl is-active sslh", check=False).ok:
+                log.success(f"TLS demuxer active on port {SSLH_PORT}.")
+            else:
+                log.warning("systemctl reported success but is-active says inactive. Checking logs.")
+                # Show last few lines of logs
+                log_output = Shell.run("journalctl -u sslh -n 10 --no-pager", check=False, timeout=5)
+                if log_output.ok:
+                    log.info("Recent sslh logs:\n" + log_output.stdout)
         else:
             log.warning("sslh service is not active after multiple attempts.")
             log.info("Check logs: journalctl -u sslh")
@@ -79,6 +95,8 @@ DAEMON_OPTS="--user sslh --listen 0.0.0.0:{SSLH_PORT} --ssl 127.0.0.1:{NGINX_SSL
             port_check2 = Shell.run("ss -lpn | grep ':443 '", check=False)
             if port_check2.ok:
                 log.error("Port 443 still occupied – please stop the service manually.")
+            else:
+                log.warning("Port 443 appears free, but sslh still failed. Try running 'sudo sslh -f' manually for debugging.")
 
         log.important("Nginx now listens on port 8443 for HTTPS (and any other HTTPS_PORTS except 443).")
         log.important("Clients can use port 443 for both HTTPS WebSocket and SSL tunnel (stunnel).")
