@@ -1,6 +1,6 @@
 """
 First feature to run. Updates apt, installs everything the rest of the
-stack needs, and purges packages that would conflict with our setup.
+stack needs, and purges packages that would conflict.
 """
 from __future__ import annotations
 
@@ -42,11 +42,10 @@ class PackagesFeature(BaseFeature):
         log.warning("packages feature does not uninstall required packages "
                      "(too destructive to run automatically); skipping")
 
-    # -- helpers ----------------------------------------------------------
     def _core_check_list(self) -> list[str]:
         return ["nginx", "dropbear", "openssh-server", "fail2ban",
-                "certbot", "python3", "iptables", "git", "squid", "stunnel4", "sslh", 
-               "iodine", "build-essential", "libpcap-dev"]
+                "certbot", "python3", "iptables", "git", "squid", "stunnel4",
+                "sslh", "iodine", "build-essential", "libpcap-dev", "wget"]
 
     def _dpkg_installed(self, pkg: str) -> bool:
         result = Shell.run(f"dpkg -s {pkg}", check=False)
