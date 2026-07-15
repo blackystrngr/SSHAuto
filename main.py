@@ -1,16 +1,6 @@
 #!/usr/bin/env python3
 """
 sshauto — SSH-over-websocket relay autoscript.
-
-Usage:
-    python3 main.py install               full automated first-time setup
-    python3 main.py install --only nginx_relay,firewall
-    python3 main.py update                git pull + re-apply (manual trigger;
-                                           normally the 30s timer does this)
-    python3 main.py status                show each feature's install state
-    python3 main.py cert                  (re)run the certificate wizard
-    python3 main.py uninstall             best-effort teardown
-    python3 main.py dashboard             same as typing `kk`
 """
 from __future__ import annotations
 
@@ -26,6 +16,7 @@ from core.exceptions import SSHAutoError
 from core.logger import log
 from core.plugin_manager import PluginManager
 from core.shell import Shell
+from core.services import restart_all_services   # <-- NEW
 
 BANNER = r"""
    _____ _____ _   _   ___         _
@@ -38,8 +29,6 @@ BANNER = r"""
    websocket relay autoscript — type 'kk' any time for the dashboard
 """
 
-# Certificates are deliberately excluded from a blanket "install everything"
-# so re-issuing a cert is always an explicit operator action.
 NON_IDEMPOTENT = {"certificates"}
 
 
@@ -76,6 +65,9 @@ def cmd_install(args):
             log.warning(f"Some features failed: {', '.join(failures)}. "
                         f"Run 'python3 main.py status' for details.")
 
+    # --- POST-INSTALL: Restart all services (even if some features failed) ---
+    restart_all_services()
+
 
 def cmd_update(args):
     require_root()
@@ -111,7 +103,6 @@ def cmd_dashboard(args):
 
 
 def _install_kk_command():
-    """Symlinks the `kk` word to launch the dashboard from any shell."""
     from core.config import APP_ROOT
     wrapper = "/usr/local/bin/kk"
     try:
@@ -122,22 +113,6 @@ def _install_kk_command():
     except OSError as exc:
         log.warning(f"could not install the 'kk' shortcut: {exc}")
 
-def cmd_client_config(args):
-    from core.config import state
-    data = state.load()
-    domain = data.get("cert_domain", "your.domain.com")
-    print("\n" + "=" * 50)
-    print("      HTTP INJECTOR CLIENT CONFIGURATION      ")
-    print("=" * 50)
-    print(f"[+] Tunnel Type: SSH -> Custom Payload (raw TCP)")
-    print(f"[+] Payload:     GET / HTTP/1.1[crlf]Host: {domain}[crlf][crlf]")
-    print(f"[+] Proxy IP:    {domain}")
-    print(f"[+] Proxy Port:  80 (also 8080, 8880, or 443/8443/2096 with SSL)")
-    print(f"[+] SSH Host:    {domain}")
-    print(f"[+] SSH Port:    80 (use SSL ports if HTTPS is set up)")
-    print("=" * 50 + "\n")
-    print("IMPORTANT: Ensure Cloudflare proxy is OFF (grey cloud) for this domain!")
-    print("Otherwise you will get 521 errors.\n")
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sshauto")
@@ -165,9 +140,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_dash = sub.add_parser("dashboard", help="open the kk dashboard")
     p_dash.set_defaults(func=cmd_dashboard)
-
-    p_client = sub.add_parser("client-config", help="print HTTP Injector client configuration")
-    p_client.set_defaults(func=cmd_client_config)
 
     return parser
 
