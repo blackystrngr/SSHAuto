@@ -14,7 +14,10 @@ SERVICES = [
     "ws-ssh-proxy",
     "badvpn-udpgw",
     "stunnel4",
-    "sslh",   # optional
+    "sslh",
+    "hysteria",
+    "iodine",
+    "ptunnel",
 ]
 
 def restart_service(service: str) -> bool:
