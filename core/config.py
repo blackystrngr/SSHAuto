@@ -63,6 +63,7 @@ SYSTEMD_DIR = Path("/etc/systemd/system")
 
 FAIL2BAN_FILTER_DIR = Path("/etc/fail2ban/filter.d")
 FAIL2BAN_JAIL_LOCAL = Path("/etc/fail2ban/jail.local")
+SSHAUTO_CERT_DIR = Path("/var/lib/sshauto/certs")
 
 
 class StateStore:
