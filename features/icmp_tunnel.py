@@ -15,7 +15,8 @@ ICMPTUNNEL_BIN = Path("/usr/local/bin/ICMPTunnel")
 ICMPTUNNEL_CONFIG = Path("/etc/icmptunnel/config.json")
 ICMPTUNNEL_SERVICE = Path("/etc/systemd/system/icmptunnel.service")
 
-ICMPTUNNEL_URL = "https://github.com/Qteam-official/ICMPTunnel/releases/download/v1.1.0/ICMPTunnel-linux-amd64"
+ICMPTUNNEL_URL = "https://github.com/esrrhs/pingtunnel/releases/latest/download/pingtunnel_linux64.zip"
+ICMP_TUNNEL_KEY_DEFAULT = 123456
 
 
 class IcmpTunnelFeature(BaseFeature):
