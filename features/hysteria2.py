@@ -29,6 +29,7 @@ class Hysteria2Feature(BaseFeature):
         port = data.get("hysteria_port", 8443)
         domain = data.get("hysteria_domain", "ns1.hi.blackstrngr.qzz.io")
         password = data.get("hysteria_password", "helloworld")
+        server_ip = data.get("server_ip", "your_vps_ip")
 
         # 1. Run official install script
         log.info("Running official Hysteria2 installer...")
@@ -37,7 +38,7 @@ class Hysteria2Feature(BaseFeature):
             log.error(f"Official install failed: {result.stderr}")
             raise Exception("Hysteria2 install script failed.")
 
-        # 2. Generate self‑signed certificate (as per manual guide)
+        # 2. Generate self‑signed certificate
         log.info(f"Generating self‑signed certificate for {domain}...")
         cert_dir = Path("/etc/hysteria")
         cert_dir.mkdir(parents=True, exist_ok=True)
@@ -82,7 +83,7 @@ masquerade:
             log.warning("Hysteria2 may not be active. Check 'systemctl status hysteria-server'")
 
         log.important("Client config:")
-        log.important(f"  Server: your_vps_ip:{port}")
+        log.important(f"  Server: {server_ip}:{port}")
         log.important(f"  Password: {password}")
         log.important(f"  SNI: {domain}")
         log.important("  Allow Insecure: YES (self‑signed)")
