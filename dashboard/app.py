@@ -1,10 +1,9 @@
 """
 The interactive dashboard, launched by typing `kk` at the shell.
-Now with extra services (Squid, stunnel, sslh, UDPGW) status.
 """
 from __future__ import annotations
 
-from core.config import state, HTTP_PORTS, HTTPS_PORTS
+from core.config import state
 from core.exceptions import SSHAutoError
 from core.logger import log
 from dashboard import ui
@@ -51,7 +50,7 @@ class Dashboard:
             ("11", "Extra Services (Squid, stunnel, sslh, UDPGW)"),
             ("12", "Hysteria2 UDP/QUIC tunnel"),
             ("13", "DNS tunnel (iodine)"),
-            ("14", "ICMP tunnel (ptunnel)"),
+            ("14", "ICMP tunnel (ICMPTunnel)"),
             ("0", "Exit"),
         ])
 
@@ -87,7 +86,6 @@ class Dashboard:
             pass
         ui.pause()
 
-    # -- existing actions (unchanged) -------------------------------------
     def _create_user(self):
         ui.clear()
         ui.header("create user")
@@ -212,7 +210,6 @@ class Dashboard:
                     log.error(f"Error during rollback: {e}")
                     ui.prompt("\nPress Enter to continue...")
 
-    # -- NEW: Extra Services Status -----------------------------------------
     def _extra_services_status(self):
         ui.clear()
         ui.header("Extra Services Overview", "Squid, stunnel, sslh, UDPGW")
@@ -220,28 +217,24 @@ class Dashboard:
         from core.shell import Shell
         from pathlib import Path
 
-        # Squid
         squid_active = Shell.run("systemctl is-active squid", check=False).ok
         squid_installed = Path("/etc/squid/squid.conf").exists()
         ui.kv_row("Squid HTTP Proxy",
                   f"{'✅ ACTIVE' if squid_active else '❌ INACTIVE'} (port 3128 internal)",
                   color="\033[1;32m" if squid_active else "\033[1;31m")
 
-        # stunnel
         stunnel_active = Shell.run("systemctl is-active stunnel4", check=False).ok
         stunnel_installed = Path("/etc/stunnel/stunnel.conf").exists()
         ui.kv_row("stunnel SSL Tunnel",
                   f"{'✅ ACTIVE' if stunnel_active else '❌ INACTIVE'} (port 4443 internal)",
                   color="\033[1;32m" if stunnel_active else "\033[1;31m")
 
-        # sslh
         sslh_active = Shell.run("systemctl is-active sslh", check=False).ok
         sslh_installed = Path("/etc/default/sslh").exists()
         ui.kv_row("sslh TLS Demuxer",
                   f"{'✅ ACTIVE' if sslh_active else '❌ INACTIVE'} (port 443)",
                   color="\033[1;32m" if sslh_active else "\033[1;31m")
 
-        # UDPGW
         udpgw_active = Shell.run("systemctl is-active badvpn-udpgw", check=False).ok
         udpgw_installed = Path("/usr/local/bin/badvpn-udpgw").exists()
         ui.kv_row("badvpn-udpgw (UDP)",
@@ -254,24 +247,19 @@ class Dashboard:
         print()
         log.important("Use 'sudo python3 main.py install --only <feature>' to enable/disable individual services.")
 
-    def _safe_live_stats(self):
-        try:
-            return self.monitor.live_stats(sample_seconds=0.3)
-        except Exception:
-            return None
-
+    # --- New tunnel management methods ---
     def _manage_hysteria2(self):
-    from features.hysteria2 import Hysteria2Feature
-    self._toggle_feature(Hysteria2Feature())
+        from features.hysteria2 import Hysteria2Feature
+        self._toggle_feature(Hysteria2Feature())
 
     def _manage_dns_tunnel(self):
         from features.dns_tunnel import DnsTunnelFeature
         self._toggle_feature(DnsTunnelFeature())
-    
+
     def _manage_icmp_tunnel(self):
         from features.icmp_tunnel import IcmpTunnelFeature
         self._toggle_feature(IcmpTunnelFeature())
-    
+
     def _toggle_feature(self, feature):
         ui.clear()
         ui.header(f"Manage {feature.name}")
@@ -294,11 +282,12 @@ class Dashboard:
             feature.remove()
             log.success(f"{feature.name} disabled.")
         ui.pause()
-        
 
-
-
-
+    def _safe_live_stats(self):
+        try:
+            return self.monitor.live_stats(sample_seconds=0.3)
+        except Exception:
+            return None
 
 
 def main():
