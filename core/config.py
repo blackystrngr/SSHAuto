@@ -19,7 +19,7 @@ HTTPS_PORTS = {443, 8443, 2053, 2083, 2087, 2096}
 
 SSH_PORT_DEFAULT = 22                 # real OpenSSH, direct access
 DROPBEAR_PORT_DEFAULT = 110           # dropbear tunnel backend
-PROXY_PORT_DEFAULT = 8000             # Python asyncio proxy
+PROXY_PORT_DEFAULT = 9955             # Python asyncio proxy
 SQUID_PORT_DEFAULT = 3128             # Squid HTTP proxy (internal)
 STUNNEL_PORT_DEFAULT = 4443           # stunnel SSL tunnel (internal)
 
