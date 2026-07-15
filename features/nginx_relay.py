@@ -1,3 +1,7 @@
+"""
+Builds /etc/nginx/sites-available/sshauto-relay.conf and symlinks it.
+Removes any other site configs (like ssh_tunnel) to avoid conflicts.
+"""
 from pathlib import Path
 from core.config import (
     APP_ROOT, PROXY_PORT_DEFAULT, HTTP_PORTS, HTTPS_PORTS,
@@ -32,6 +36,9 @@ class NginxRelayFeature(BaseFeature):
         NGINX_SITES_AVAILABLE.mkdir(parents=True, exist_ok=True)
         NGINX_SITES_ENABLED.mkdir(parents=True, exist_ok=True)
 
+        # --- Remove any conflicting site configs ---
+        self._remove_conflicting_sites()
+
         self._disable_default_site()
         config_text = self._render()
         self.available_path.write_text(config_text)
@@ -61,6 +68,25 @@ class NginxRelayFeature(BaseFeature):
         if default.exists() or default.is_symlink():
             default.unlink()
             log.debug("disabled default site")
+
+    def _remove_conflicting_sites(self):
+        """Remove any site configs that are not ours."""
+        # List of site names that we should keep (only our own)
+        keep = [f"{NGINX_SITE_NAME}.conf", "default"]
+        for site in NGINX_SITES_ENABLED.glob("*.conf"):
+            if site.name not in keep:
+                log.info(f"Removing conflicting nginx site: {site.name}")
+                site.unlink()
+        # Also remove any leftover symlinks to old configs (like ssh_tunnel)
+        for site in NGINX_SITES_ENABLED.glob("*"):
+            if site.is_symlink() and site.name not in keep:
+                try:
+                    target = site.readlink()
+                    if target.name != f"{NGINX_SITE_NAME}.conf":
+                        log.info(f"Removing conflicting symlink: {site.name}")
+                        site.unlink()
+                except Exception:
+                    pass
 
     def _render(self) -> str:
         data = state.ensure_defaults()
