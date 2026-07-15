@@ -1,5 +1,6 @@
 """
 Adds a cron job to restart all tunnel-related services daily.
+Uses timeout to prevent hanging.
 """
 from __future__ import annotations
 
@@ -24,16 +25,28 @@ class CronRestartFeature(BaseFeature):
         log.info("Adding cron job to restart services daily at 3:00 AM...")
 
         script_content = """#!/usr/bin/env bash
-# Restart all tunnel services
-systemctl restart nginx 2>/dev/null || true
-systemctl restart squid 2>/dev/null || true
-systemctl restart dropbear-tunnel 2>/dev/null || true
-systemctl restart ws-ssh-proxy 2>/dev/null || true
-systemctl restart badvpn-udpgw 2>/dev/null || true
-systemctl restart stunnel4 2>/dev/null || true
-systemctl restart sslh 2>/dev/null || true
-systemctl restart haproxy 2>/dev/null || true
-# Log the restart
+# Restart all tunnel services with a 15-second timeout per service
+restart_service() {
+    service=$1
+    echo "Restarting $service..."
+    timeout 15 systemctl restart $service 2>/dev/null
+    if [ $? -ne 0 ]; then
+        echo "$service restart timed out, force stopping..."
+        timeout 5 systemctl stop $service 2>/dev/null
+        timeout 2 systemctl kill -s KILL $service 2>/dev/null
+        sleep 1
+        systemctl start $service 2>/dev/null
+    fi
+}
+
+restart_service nginx
+restart_service squid
+restart_service dropbear-tunnel
+restart_service ws-ssh-proxy
+restart_service badvpn-udpgw
+restart_service stunnel4
+restart_service sslh
+
 echo "$(date): All services restarted" >> /var/log/sshauto/restart.log
 """
         CRON_SCRIPT.write_text(script_content)
