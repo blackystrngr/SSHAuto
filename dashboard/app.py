@@ -49,6 +49,9 @@ class Dashboard:
             ("9", "Server status (services)"),
             ("10", "Network Optimizer & BBR Menu"),
             ("11", "Extra Services (Squid, stunnel, sslh, UDPGW)"),
+            ("12", "Hysteria2 UDP/QUIC tunnel"),
+            ("13", "DNS tunnel (iodine)"),
+            ("14", "ICMP tunnel (ptunnel)"),
             ("0", "Exit"),
         ])
 
@@ -65,6 +68,9 @@ class Dashboard:
             "9": self._service_status,
             "10": self._manage_network_optimizer,
             "11": self._extra_services_status,
+            "12": self._manage_hysteria2,
+            "13": self._manage_dns_tunnel,
+            "14": self._manage_icmp_tunnel,
         }
         action = actions.get(choice)
         if not action:
@@ -253,6 +259,46 @@ class Dashboard:
             return self.monitor.live_stats(sample_seconds=0.3)
         except Exception:
             return None
+
+    def _manage_hysteria2(self):
+    from features.hysteria2 import Hysteria2Feature
+    self._toggle_feature(Hysteria2Feature())
+
+    def _manage_dns_tunnel(self):
+        from features.dns_tunnel import DnsTunnelFeature
+        self._toggle_feature(DnsTunnelFeature())
+    
+    def _manage_icmp_tunnel(self):
+        from features.icmp_tunnel import IcmpTunnelFeature
+        self._toggle_feature(IcmpTunnelFeature())
+    
+    def _toggle_feature(self, feature):
+        ui.clear()
+        ui.header(f"Manage {feature.name}")
+        status = "Active" if feature.is_installed() else "Inactive"
+        ui.kv_row("Status", status)
+        print()
+        ui.menu([
+            ("1", "Install/Enable"),
+            ("2", "Remove/Disable"),
+            ("0", "Back"),
+        ])
+        choice = ui.prompt("Select")
+        if choice == "1":
+            try:
+                feature.install()
+                log.success(f"{feature.name} enabled.")
+            except Exception as e:
+                log.error(f"Failed: {e}")
+        elif choice == "2":
+            feature.remove()
+            log.success(f"{feature.name} disabled.")
+        ui.pause()
+        
+
+
+
+
 
 
 def main():
