@@ -45,6 +45,8 @@ class PackagesFeature(BaseFeature):
 
     # -- helpers ----------------------------------------------------------
     def _core_check_list(self) -> list[str]:
+        # spot-check a representative subset rather than every package,
+        # so a partial re-run doesn't look "not installed" for no reason
         return ["nginx", "dropbear", "openssh-server", "fail2ban",
                 "certbot", "python3", "iptables", "git", "squid", "stunnel4", "sslh", "haproxy"]
 
@@ -74,6 +76,6 @@ class PackagesFeature(BaseFeature):
         log.info(f"pip installing: {', '.join(PIP_PACKAGES)}")
         Shell.run(
             "pip3 install --break-system-packages -q " + " ".join(PIP_PACKAGES),
-            check=False,
+            check=False,   # some distros don't need --break-system-packages
             timeout=180,
         )
