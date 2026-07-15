@@ -1,5 +1,5 @@
 """
-ICMP Tunneling using pingtunnel (Go‑based) – compiled from source.
+ICMP Tunneling – pingtunnel 2.8, architecture‑aware.
 """
 from __future__ import annotations
 
@@ -15,14 +15,14 @@ PINGTUNNEL_SERVICE = Path("/etc/systemd/system/pingtunnel.service")
 
 class IcmpTunnelFeature(BaseFeature):
     name = "icmp_tunnel"
-    description = "ICMP tunneling using pingtunnel (Go‑based)"
+    description = "ICMP tunneling (pingtunnel 2.8)"
     depends_on = ["packages"]
 
     def is_installed(self) -> bool:
         return PINGTUNNEL_BIN.exists() and PINGTUNNEL_SERVICE.exists()
 
     def install(self) -> None:
-        log.info("Installing pingtunnel ICMP tunnel from source...")
+        log.info("Installing pingtunnel ICMP tunnel...")
 
         data = state.ensure_defaults()
         key = data.get("icmp_tunnel_key", 123456)
@@ -32,18 +32,27 @@ class IcmpTunnelFeature(BaseFeature):
         Shell.run("sysctl -w net.ipv4.icmp_echo_ignore_all=1", check=False)
         Shell.run('echo "net.ipv4.icmp_echo_ignore_all=1" | tee -a /etc/sysctl.conf', check=False)
 
-        # 2. Install Go and build tools
-        Shell.run("apt-get install -y golang-go git make", check=True)
+        # 2. Detect architecture and download correct zip
+        arch = Shell.run("uname -m", check=True).stdout.strip()
+        if arch == "x86_64":
+            file_arch = "linux_amd64"
+        elif arch == "aarch64":
+            file_arch = "linux_arm64"
+        else:
+            raise Exception(f"Unsupported architecture: {arch}")
 
-        # 3. Clone and build pingtunnel from source
-        log.info("Cloning and building pingtunnel from source...")
-        Shell.run("git clone https://github.com/esrrhs/pingtunnel.git /tmp/pingtunnel", check=True)
-        Shell.run("cd /tmp/pingtunnel && go build -o pingtunnel", check=True)
-        Shell.run("cp /tmp/pingtunnel/pingtunnel /usr/local/bin/", check=True)
+        log.info(f"Architecture: {arch} -> {file_arch}")
+        url = f"https://github.com/esrrhs/pingtunnel/releases/download/2.8/pingtunnel_{file_arch}.zip"
+        log.info(f"Downloading from: {url}")
+
+        Shell.run("mkdir -p /tmp/pingtunnel_setup", check=True)
+        Shell.run(f"wget -O /tmp/pingtunnel_setup/pingtunnel.zip {url}", check=True)
+        Shell.run("cd /tmp/pingtunnel_setup && unzip -o pingtunnel.zip", check=True)
+        Shell.run("mv /tmp/pingtunnel_setup/pingtunnel /usr/local/bin/", check=True)
         Shell.run("chmod +x /usr/local/bin/pingtunnel", check=True)
-        Shell.run("rm -rf /tmp/pingtunnel", check=False)
+        Shell.run("rm -rf /tmp/pingtunnel_setup", check=False)
 
-        # 4. Create systemd service
+        # 3. Create systemd service
         service_content = f"""
 [Unit]
 Description=Pingtunnel ICMP Server
@@ -54,29 +63,28 @@ Type=simple
 User=root
 ExecStart={PINGTUNNEL_BIN} -type server -key {key}
 Restart=always
-RestartSec=5
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
 """
         PINGTUNNEL_SERVICE.write_text(service_content)
-        log.info(f"Systemd service created with key: {key}")
+        log.info(f"Service created with key: {key}")
 
-        # 5. Enable and start the service
+        # 4. Enable and start
         Shell.run("systemctl daemon-reload", timeout=10)
         Shell.run("systemctl enable pingtunnel", check=False)
         Shell.run("systemctl start pingtunnel", check=False, timeout=10)
 
         status = Shell.run("systemctl is-active pingtunnel", check=False, timeout=5)
         if status.ok and "active" in status.stdout:
-            log.success("Pingtunnel ICMP tunnel installed and running.")
+            log.success("Pingtunnel installed and running.")
         else:
-            log.warning("Pingtunnel service may not be active. Check with 'systemctl status pingtunnel'")
+            log.warning("Pingtunnel may not be active. Check 'systemctl status pingtunnel'")
 
-        log.important("Client configuration:")
-        log.important(f"  Server IP: your_vps_ip (ICMP protocol)")
+        log.important("Client config:")
+        log.important(f"  Server IP: your_vps_ip (ICMP)")
         log.important(f"  Key: {key} (numeric)")
-        log.important("  Use a client that supports pingtunnel (e.g., HTTP Custom, NetMod)")
 
     def remove(self) -> None:
         Shell.run("systemctl stop pingtunnel", check=False)
@@ -85,4 +93,4 @@ WantedBy=multi-user.target
         PINGTUNNEL_BIN.unlink(missing_ok=True)
         Shell.run("systemctl daemon-reload", check=False)
         Shell.run("sysctl -w net.ipv4.icmp_echo_ignore_all=0", check=False)
-        log.info("ICMP tunnel removed.")
+        log.info("Pingtunnel removed.")
