@@ -35,7 +35,6 @@ else
     git clone --branch "${BRANCH}" --depth 1 "${REPO_URL}" "${APP_ROOT}"
 fi
 
-# Ensure executable permissions are cleanly applied across scripts
 chmod +x "${APP_ROOT}/main.py"
 if [[ -d "${APP_ROOT}/scripts" ]]; then
     chmod +x "${APP_ROOT}/scripts/"*.py 2>/dev/null || true
@@ -48,7 +47,7 @@ else
     c_red "Warning: requirements.txt not found in ${APP_ROOT}"
 fi
 
-c_cyan "==> Running the automated installer"
-python3 "${APP_ROOT}/main.py" install
+c_cyan "==> Running the automated installer (--force to rewrite all configs)"
+python3 "${APP_ROOT}/main.py" install --force
 
 c_green "==> Done. Type 'kk' any time to open the dashboard."
