@@ -26,6 +26,7 @@ class IcmpTunnelFeature(BaseFeature):
 
         data = state.ensure_defaults()
         key = data.get("icmp_tunnel_key", 123456)
+        server_ip = data.get("server_ip", "your_vps_ip")
 
         # 1. Disable kernel ICMP replies
         log.info("Disabling kernel ICMP echo replies...")
@@ -83,7 +84,7 @@ WantedBy=multi-user.target
             log.warning("Pingtunnel may not be active. Check 'systemctl status pingtunnel'")
 
         log.important("Client config:")
-        log.important(f"  Server IP: your_vps_ip (ICMP)")
+        log.important(f"  Server IP: {server_ip} (ICMP protocol)")
         log.important(f"  Key: {key} (numeric)")
 
     def remove(self) -> None:
