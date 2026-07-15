@@ -51,6 +51,7 @@ WantedBy=multi-user.target
         Shell.run("systemctl start ptunnel", check=False, timeout=10)
 
         log.success("ICMP tunnel active.")
+        log.important("Client: ptunnel -p <VPS_IP> -lp <local_port> -da <dest> -dp <port>")
 
     def remove(self) -> None:
         Shell.run("systemctl stop ptunnel", check=False)
