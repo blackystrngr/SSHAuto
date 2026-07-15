@@ -1,17 +1,17 @@
 import os
+import socket
+import time
 from pathlib import Path
+
 from features.base import BaseFeature
 from core.shell import Shell
 from core.logger import log
 from core.config import state, PROXY_PORT_DEFAULT
-import time
-import socket
 
 PROXY_BIN = Path("/usr/local/bin/ws_ssh_proxy.py")
 SERVICE_NAME = "ws-ssh-proxy.service"
 
 def find_available_port(start_port=9955, max_tries=10):
-    """Find an available port starting from start_port."""
     for port in range(start_port, start_port + max_tries):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
@@ -19,7 +19,7 @@ def find_available_port(start_port=9955, max_tries=10):
                 return port
             except OSError:
                 continue
-    raise Exception("No available ports found in range.")
+    raise Exception("No available ports found.")
 
 class PythonProxyFeature(BaseFeature):
     name = "python_proxy"
@@ -32,7 +32,12 @@ class PythonProxyFeature(BaseFeature):
         data = state.ensure_defaults()
         proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
 
-        # Check if the port is available; if not, find a new one
+        if proxy_port in (8000, 8001):
+            log.info(f"Migrating proxy port from {proxy_port} to {PROXY_PORT_DEFAULT}")
+            proxy_port = PROXY_PORT_DEFAULT
+            data["proxy_port"] = proxy_port
+            state.save(data)
+
         if not self._port_available(proxy_port):
             log.warning(f"Port {proxy_port} is busy. Finding an available port...")
             new_port = find_available_port(proxy_port + 1)
@@ -42,7 +47,6 @@ class PythonProxyFeature(BaseFeature):
 
         dropbear_port = data.get("dropbear_port", 110)
 
-        # Proxy code (same as before, but using the variable)
         proxy_code = f'''#!/usr/bin/env python3
 import asyncio
 import socket
@@ -86,6 +90,81 @@ async def pipe(src, dst, direction=""):
     finally:
         dst.close()
 
+async def handle_connect(reader, writer, target_host, target_port):
+    """Handle HTTP CONNECT: establish tunnel to target_host:target_port."""
+    logging.info(f"CONNECT to {{target_host}}:{{target_port}}")
+    try:
+        # Connect to target
+        ssh_reader, ssh_writer = await asyncio.wait_for(
+            asyncio.open_connection(target_host, target_port),
+            timeout=5.0
+        )
+    except Exception as e:
+        logging.error(f"CONNECT to {{target_host}}:{{target_port}} failed: {{e}}")
+        writer.write(b'HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n')
+        await writer.drain()
+        writer.close()
+        return
+
+    # Send 200 Connection Established
+    writer.write(b'HTTP/1.1 200 Connection Established\\r\\n\\r\\n')
+    await writer.drain()
+
+    # Tunnel data
+    ssh_sock = ssh_writer.get_extra_info('socket')
+    if ssh_sock:
+        ssh_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1048576)
+        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
+        set_socket_quickack(ssh_sock)
+
+    try:
+        await asyncio.gather(
+            pipe(reader, ssh_writer, "client->ssh"),
+            pipe(ssh_reader, writer, "ssh->client")
+        )
+    except Exception as e:
+        logging.error(f"CONNECT tunnel error: {{e}}")
+    finally:
+        writer.close()
+        ssh_writer.close()
+
+async def handle_websocket(reader, writer):
+    """Handle WebSocket upgrade: connect to Dropbear and tunnel."""
+    writer.write(b'HTTP/1.1 101 Switching Protocols\\r\\n')
+    writer.write(b'Upgrade: websocket\\r\\n')
+    writer.write(b'Connection: Upgrade\\r\\n')
+    writer.write(b'\\r\\n')
+    await writer.drain()
+
+    try:
+        ssh_reader, ssh_writer = await asyncio.wait_for(
+            asyncio.open_connection('127.0.0.1', DROPBEAR_PORT),
+            timeout=2.0
+        )
+    except Exception as e:
+        logging.error(f"Dropbear connection failed: {{e}}")
+        writer.close()
+        return
+
+    ssh_sock = ssh_writer.get_extra_info('socket')
+    if ssh_sock:
+        ssh_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1048576)
+        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
+        set_socket_quickack(ssh_sock)
+
+    try:
+        await asyncio.gather(
+            pipe(reader, ssh_writer, "client->ssh"),
+            pipe(ssh_reader, writer, "ssh->client")
+        )
+    except Exception as e:
+        logging.error(f"WebSocket tunnel error: {{e}}")
+    finally:
+        writer.close()
+        ssh_writer.close()
+
 async def handle_client(reader, writer):
     start_time = time.time()
     peername = writer.get_extra_info('peername')
@@ -98,6 +177,7 @@ async def handle_client(reader, writer):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
         set_socket_quickack(sock)
 
+    # Read request line
     try:
         first_line = await reader.readline()
     except Exception:
@@ -110,8 +190,13 @@ async def handle_client(reader, writer):
     logging.info(f"Read first_line in {{elapsed}}ms")
 
     parts = first_line.decode().strip().split()
-    method = parts[0] if len(parts) > 0 else ''
+    if len(parts) < 3:
+        writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
+        writer.close()
+        return
+    method, raw_target, version = parts[0], parts[1], parts[2]
 
+    # Read headers
     headers = {{}}
     while True:
         line = await reader.readline()
@@ -123,74 +208,36 @@ async def handle_client(reader, writer):
     elapsed = round((time.time() - start_time) * 1000)
     logging.info(f"Headers read in {{elapsed}}ms")
 
+    # --- 1. HTTP CONNECT ---
     if method.upper() == 'CONNECT':
-        writer.write(b'HTTP/1.1 200 Connection Established\\r\\n\\r\\n')
-        await writer.drain()
-        try:
-            first_line = await reader.readline()
-            if not first_line:
-                writer.close()
-                return
-            parts = first_line.decode().strip().split()
-            method = parts[0] if len(parts) > 0 else ''
-            headers = {{}}
-            while True:
-                line = await reader.readline()
-                if not line or line == b'\\r\\n':
-                    break
-                key, value = line.decode().strip().split(':', 1)
-                headers[key.lower()] = value.strip()
-        except Exception as e:
-            logging.error(f"Error reading upgrade: {{e}}")
+        # Parse target: host:port
+        if ':' not in raw_target:
+            writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
             writer.close()
             return
+        host, port_str = raw_target.rsplit(':', 1)
+        try:
+            port = int(port_str)
+        except ValueError:
+            writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
+            writer.close()
+            return
+        # Only allow localhost Dropbear? We'll allow any, but add a note.
+        logging.info(f"CONNECT request to {{host}}:{{port}} from {{peername}}")
+        await handle_connect(reader, writer, host, port)
+        return
 
+    # --- 2. WebSocket Upgrade ---
     upgrade = headers.get('upgrade', '').lower()
-    if upgrade != 'websocket':
-        writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
-        writer.close()
+    if upgrade == 'websocket':
+        logging.info(f"WebSocket upgrade from {{peername}}")
+        await handle_websocket(reader, writer)
         return
 
-    writer.write(b'HTTP/1.1 101 Switching Protocols\\r\\n')
-    writer.write(b'Upgrade: websocket\\r\\n')
-    writer.write(b'Connection: Upgrade\\r\\n')
-    writer.write(b'\\r\\n')
-    await writer.drain()
-    elapsed = round((time.time() - start_time) * 1000)
-    logging.info(f"101 sent in {{elapsed}}ms")
-
-    try:
-        ssh_reader, ssh_writer = await asyncio.wait_for(
-            asyncio.open_connection('127.0.0.1', DROPBEAR_PORT),
-            timeout=2.0
-        )
-    except Exception as e:
-        logging.error(f"Dropbear connection failed: {{e}}")
-        writer.close()
-        return
-    elapsed = round((time.time() - start_time) * 1000)
-    logging.info(f"Dropbear connected in {{elapsed}}ms")
-
-    ssh_sock = ssh_writer.get_extra_info('socket')
-    if ssh_sock:
-        ssh_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1048576)
-        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
-        set_socket_quickack(ssh_sock)
-
-    logging.info(f"Tunnel established for {{peername}} ({{elapsed}}ms)")
-    try:
-        await asyncio.gather(
-            pipe(reader, ssh_writer, "client->ssh"),
-            pipe(ssh_reader, writer, "ssh->client")
-        )
-    except Exception as e:
-        logging.error(f"Tunnel error: {{e}}")
-    finally:
-        writer.close()
-        ssh_writer.close()
-        total = round((time.time() - start_time) * 1000)
-        logging.info(f"Tunnel closed for {{peername}} ({{total}}ms)")
+    # --- 3. Other methods ---
+    writer.write(b'HTTP/1.1 405 Method Not Allowed\\r\\n\\r\\n')
+    writer.close()
+    logging.info(f"Unsupported method {{method}} from {{peername}}")
 
 async def main():
     server = await asyncio.start_server(
@@ -220,7 +267,7 @@ if __name__ == '__main__':
 
         # Systemd service
         service_content = f"""[Unit]
-Description=Fast TCP Proxy to SSH (uvloop + QuickACK)
+Description=Unified Proxy (WebSocket + CONNECT)
 After=network.target dropbear-tunnel.service
 Wants=dropbear-tunnel.service
 
@@ -252,7 +299,7 @@ WantedBy=multi-user.target
         if not self.is_installed():
             raise Exception("Proxy service installed but not active.")
 
-        log.success(f"Python Proxy installed on port {proxy_port} (uvloop, QuickACK).")
+        log.success(f"Unified Python Proxy installed on port {proxy_port} (CONNECT + WebSocket).")
 
     def remove(self) -> None:
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
