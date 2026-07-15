@@ -3,6 +3,7 @@ Hysteria2 – UDP/QUIC tunnel (high-performance, bypasses TCP interception).
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from core.config import state, LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR
 from core.logger import log
@@ -27,12 +28,29 @@ class Hysteria2Feature(BaseFeature):
     def install(self) -> None:
         log.info("Installing Hysteria2...")
 
-        # Download binary
+        # Stop service if running (to avoid "Text file busy")
+        Shell.run("systemctl stop hysteria", check=False, timeout=5)
+
+        # Remove old binary if it exists
+        if HYSTERIA_BIN.exists():
+            HYSTERIA_BIN.unlink()
+            log.debug("Removed old hysteria binary")
+
+        # Download binary with retries
         log.info(f"Downloading Hysteria2 from: {HYSTERIA_URL}")
-        result = Shell.run(f"wget -O {HYSTERIA_BIN} {HYSTERIA_URL}", check=False, timeout=60)
-        if not result.ok:
-            log.error(f"Failed to download Hysteria2: {result.stderr}")
-            raise Exception("Hysteria2 download failed.")
+        success = False
+        for attempt in range(1, 4):
+            result = Shell.run(f"wget -O {HYSTERIA_BIN} {HYSTERIA_URL}", check=False, timeout=60)
+            if result.ok:
+                success = True
+                break
+            log.warning(f"Download attempt {attempt}/3 failed, retrying in 2s...")
+            time.sleep(2)
+
+        if not success:
+            log.error(f"Failed to download Hysteria2: {result.stderr if result else 'unknown error'}")
+            raise Exception("Hysteria2 download failed after 3 attempts.")
+
         HYSTERIA_BIN.chmod(0o755)
 
         # Resolve certificate paths (same logic as nginx_relay)
@@ -46,7 +64,6 @@ class Hysteria2Feature(BaseFeature):
             raise Exception("Certificate not found. Run 'sshauto cert' first.")
 
         password = data.get("hysteria_password", "helloworld")
-
         config = f"""
 listen: :443
 tls:
