@@ -1,5 +1,5 @@
 """
-Helper functions to restart all tunnel services (except Squid).
+Helper functions to restart all tunnel services (excluding Squid).
 """
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ SERVICES = [
     "dropbear-tunnel",
     "ws-ssh-proxy",
     "badvpn-udpgw",
-    "stunnel4",
     "sslh",
     "hysteria-server",
     "dnstt-server",
