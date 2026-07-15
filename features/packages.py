@@ -45,7 +45,7 @@ class PackagesFeature(BaseFeature):
     # -- helpers ----------------------------------------------------------
     def _core_check_list(self) -> list[str]:
         return ["nginx", "dropbear", "openssh-server", "fail2ban",
-                "certbot", "python3", "iptables", "git", "squid", "stunnel4", "sslh", "haproxy"]
+                "certbot", "python3", "iptables", "git", "squid", "stunnel4", "sslh"]
 
     def _dpkg_installed(self, pkg: str) -> bool:
         result = Shell.run(f"dpkg -s {pkg}", check=False)
