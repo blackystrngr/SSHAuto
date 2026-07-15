@@ -41,6 +41,7 @@ class PluginManager:
         return self._classes[name]()
 
     def _ordered(self, wanted: list[str] | None = None) -> list[BaseFeature]:
+        """Topological sort so dependencies install before dependents."""
         wanted = wanted or self.names()
         resolved: list[str] = []
         visiting: set[str] = set()
@@ -62,9 +63,12 @@ class PluginManager:
             visit(n)
         return [self.get(n) for n in resolved]
 
-    def install_all(self, only: list[str] | None = None) -> dict[str, bool]:
+    def install_all(self, only: list[str] | None = None, force: bool = False) -> dict[str, bool]:
         results = {}
         for feature in self._ordered(only):
+            if not force and feature.is_installed():
+                log.info(f"{feature.name} already installed, skipping (use --force to overwrite)")
+                continue
             results[feature.name] = feature.safe_install()
         ok = sum(results.values())
         log.rule("summary")
