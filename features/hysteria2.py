@@ -30,9 +30,9 @@ class Hysteria2Feature(BaseFeature):
         domain = data.get("hysteria_domain", "online.mobitel.lk")
         password = data.get("hysteria_password", "helloworld")
 
-        # 1. Run official install script
+        # 1. Run official install script (fixed syntax)
         log.info("Downloading and running get.hy2.sh...")
-        result = Shell.run('bash <(curl -fsSL https://get.hy2.sh/)', check=False, timeout=120)
+        result = Shell.run('curl -fsSL https://get.hy2.sh/ | bash', check=False, timeout=120)
         if not result.ok:
             log.error(f"Official install failed: {result.stderr}")
             raise Exception("Hysteria2 install script failed.")
