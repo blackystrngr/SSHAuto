@@ -16,7 +16,7 @@ SERVICES = [
     "sslh",
     "hysteria",
     "iodine",
-    "ptunnel",
+    "icmptunnel",   # changed from ptunnel
 ]
 
 
