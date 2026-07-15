@@ -8,15 +8,16 @@ import time
 from core.logger import log
 from core.shell import Shell
 
-# List of services managed by sshauto
+# List of services managed by sshauto – EXCLUDING squid for post-install
+# Squid is restarted via cron instead.
 SERVICES = [
     "nginx",
-    "squid",
+    # "squid",      # <-- REMOVED from immediate restart
     "dropbear-tunnel",
     "ws-ssh-proxy",
     "badvpn-udpgw",
     "stunnel4",
-    "sslh", 
+    "sslh",  
 ]
 
 def restart_service(service: str) -> bool:
@@ -53,7 +54,7 @@ def restart_service(service: str) -> bool:
 
 def restart_all_services() -> None:
     """Restart every service in the list, log success/failure."""
-    log.important("Restarting all tunnel services...")
+    log.important("Restarting all tunnel services (excluding Squid)...")
     results = {}
     for svc in SERVICES:
         results[svc] = restart_service(svc)
@@ -63,3 +64,4 @@ def restart_all_services() -> None:
     if ok < len(SERVICES):
         failed = [s for s, v in results.items() if not v]
         log.warning(f"Failed services: {', '.join(failed)}")
+    log.important("Squid is not restarted immediately – it will be restarted daily at 3:00 AM via cron.")
