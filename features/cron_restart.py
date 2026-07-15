@@ -1,6 +1,5 @@
 """
 Adds a cron job to restart all tunnel-related services daily.
-This prevents long-term service hangs and ensures stable operation.
 """
 from __future__ import annotations
 
@@ -24,29 +23,26 @@ class CronRestartFeature(BaseFeature):
     def install(self) -> None:
         log.info("Adding cron job to restart services daily at 3:00 AM...")
 
-        # Create the restart script
         script_content = """#!/usr/bin/env bash
 # Restart all tunnel services
-systemctl restart nginx
-systemctl restart squid
-systemctl restart dropbear-tunnel
-systemctl restart ws-ssh-proxy
-systemctl restart badvpn-udpgw
-systemctl restart stunnel4
-systemctl restart sslh
+systemctl restart nginx 2>/dev/null || true
+systemctl restart squid 2>/dev/null || true
+systemctl restart dropbear-tunnel 2>/dev/null || true
+systemctl restart ws-ssh-proxy 2>/dev/null || true
+systemctl restart badvpn-udpgw 2>/dev/null || true
+systemctl restart stunnel4 2>/dev/null || true
+systemctl restart sslh 2>/dev/null || true
+systemctl restart haproxy 2>/dev/null || true
 # Log the restart
 echo "$(date): All services restarted" >> /var/log/sshauto/restart.log
 """
         CRON_SCRIPT.write_text(script_content)
         CRON_SCRIPT.chmod(0o755)
 
-        # Create cron job (daily at 3:00 AM)
         cron_line = "0 3 * * * root /usr/local/bin/sshauto-restart.sh > /dev/null 2>&1\n"
         CRON_FILE.write_text(cron_line)
 
-        # Ensure cron daemon reloads (it watches /etc/cron.d automatically)
         Shell.run("systemctl reload cron", check=False)
-
         log.success("Cron job installed – services will restart daily at 3:00 AM.")
         log.important("Logs written to /var/log/sshauto/restart.log")
 
