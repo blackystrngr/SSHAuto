@@ -54,7 +54,7 @@ def cmd_install(args):
         data["created_at"] = datetime.datetime.utcnow().isoformat()
         state.save(data)
 
-    results = manager.install_all(only=only)
+    results = manager.install_all(only=only, force=args.force)
 
     if not args.quiet and not args.skip_non_idempotent:
         _install_kk_command()
@@ -65,7 +65,7 @@ def cmd_install(args):
             log.warning(f"Some features failed: {', '.join(failures)}. "
                         f"Run 'python3 main.py status' for details.")
 
-    # --- POST-INSTALL: Reload systemd, then restart all services (except Squid) ---
+    # Post‑install: reload systemd and restart services (excluding Squid)
     log.info("Reloading systemd to pick up new unit files...")
     Shell.run("systemctl daemon-reload", check=False, timeout=10)
     restart_all_services()
@@ -126,6 +126,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_install.add_argument("--skip-non-idempotent", action="store_true",
                             help="used by the auto-updater; skips certificates")
     p_install.add_argument("--quiet", action="store_true")
+    p_install.add_argument("--force", action="store_true",
+                           help="force reinstall – overwrite all configurations")
     p_install.set_defaults(func=cmd_install)
 
     p_update = sub.add_parser("update", help="manually trigger a git-update check")
