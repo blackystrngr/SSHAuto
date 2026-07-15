@@ -16,7 +16,7 @@ SERVICES = [
     "sslh",
     "hysteria-server",
     "dnstt-server",
-    "icmptunnel",
+    "pingtunnel",
 ]
 
 
