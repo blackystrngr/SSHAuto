@@ -46,7 +46,7 @@ class Hysteria2Feature(BaseFeature):
         if not cert.exists() or not key.exists():
             raise Exception("Certificate not found. Run 'sshauto cert' first.")
 
-        password = data.get("hysteria_password", "changeme")
+        password = data.get("hysteria_password", "helloworld")
         config = f"""
 listen: :443
 tls:
