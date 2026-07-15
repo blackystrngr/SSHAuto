@@ -33,7 +33,6 @@ DNS_TUNNEL_DOMAIN_DEFAULT = "ns1.hi.blackstrngr.qzz.io"
 DNS_TUNNEL_PASSWORD_DEFAULT = "helloworld"
 DNS_TUNNEL_MODE_DEFAULT = "socks"
 
-ICMP_TUNNEL_PORT_DEFAULT = 4444
 ICMP_TUNNEL_KEY_DEFAULT = 123456
 
 USER_GROUP = "sshauto-users"
@@ -45,7 +44,7 @@ GIT_POLL_INTERVAL_SECONDS = 30
 REQUIRED_PACKAGES = [
     "nginx", "dropbear", "fail2ban", "iptables", "curl", "git",
     "certbot", "squid", "stunnel4", "sslh", "cron", "iodine",
-    "build-essential", "libpcap-dev", "wget", "ufw"
+    "build-essential", "libpcap-dev", "wget", "ufw", "golang-go"
 ]
 REMOVE_PACKAGES = ["apache2", "ufw", "firewalld"]
 PIP_PACKAGES = []
@@ -116,12 +115,11 @@ class StateStore:
             "dns_tunnel_domain": DNS_TUNNEL_DOMAIN_DEFAULT,
             "dns_tunnel_password": DNS_TUNNEL_PASSWORD_DEFAULT,
             "dns_tunnel_mode": DNS_TUNNEL_MODE_DEFAULT,
-            "icmp_tunnel_port": ICMP_TUNNEL_PORT_DEFAULT,
             "icmp_tunnel_key": ICMP_TUNNEL_KEY_DEFAULT,
             "custom_http_ports": [],
             "custom_https_ports": [],
             "cert_strategy": None,
-            "cert_domain": "hi.blackstrngr.qzz.io",   # your main domain
+            "cert_domain": "hi.blackstrngr.qzz.io",
             "installed_features": [],
             "created_at": None,
         }
