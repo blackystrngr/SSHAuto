@@ -1,74 +1,60 @@
 """
-Hysteria2 – UDP/QUIC tunnel (high-performance, bypasses TCP interception).
+Hysteria2 – UDP/QUIC tunnel using the official install script.
+Fully configurable via state (port, domain, password).
 """
 from __future__ import annotations
 
-import time
 from pathlib import Path
-from core.config import state, LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR
+from core.config import state
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
 
-HYSTERIA_BIN = Path("/usr/local/bin/hysteria")
 HYSTERIA_CONFIG = Path("/etc/hysteria/config.yaml")
-HYSTERIA_SERVICE = Path("/etc/systemd/system/hysteria.service")
-
-HYSTERIA_URL = "https://github.com/apernet/hysteria/releases/download/app%2Fv2.10.0/hysteria-linux-amd64"
+HYSTERIA_SERVICE = Path("/etc/systemd/system/hysteria-server.service")
 
 
 class Hysteria2Feature(BaseFeature):
     name = "hysteria2"
-    description = "Install Hysteria2 UDP/QUIC tunnel"
-    depends_on = ["certificates"]
+    description = "Install Hysteria2 UDP/QUIC tunnel (official script)"
+    depends_on = ["packages"]
 
     def is_installed(self) -> bool:
-        return HYSTERIA_BIN.exists() and HYSTERIA_CONFIG.exists()
+        return HYSTERIA_CONFIG.exists() and HYSTERIA_SERVICE.exists()
 
     def install(self) -> None:
-        log.info("Installing Hysteria2...")
+        log.info("Installing Hysteria2 using official script...")
 
-        # Stop service if running (to avoid "Text file busy")
-        Shell.run("systemctl stop hysteria", check=False, timeout=5)
-
-        # Remove old binary if it exists
-        if HYSTERIA_BIN.exists():
-            HYSTERIA_BIN.unlink()
-            log.debug("Removed old hysteria binary")
-
-        # Download binary with retries
-        log.info(f"Downloading Hysteria2 from: {HYSTERIA_URL}")
-        success = False
-        for attempt in range(1, 4):
-            result = Shell.run(f"wget -O {HYSTERIA_BIN} {HYSTERIA_URL}", check=False, timeout=60)
-            if result.ok:
-                success = True
-                break
-            log.warning(f"Download attempt {attempt}/3 failed, retrying in 2s...")
-            time.sleep(2)
-
-        if not success:
-            log.error(f"Failed to download Hysteria2: {result.stderr if result else 'unknown error'}")
-            raise Exception("Hysteria2 download failed after 3 attempts.")
-
-        HYSTERIA_BIN.chmod(0o755)
-
-        # Resolve certificate paths (same logic as nginx_relay)
         data = state.ensure_defaults()
-        domain = data.get("cert_domain")
-        if not domain:
-            raise Exception("No domain set. Run 'sshauto cert' first.")
-
-        cert_path, key_path = self._resolve_cert_paths(data, domain)
-        if not cert_path or not key_path:
-            raise Exception("Certificate not found. Run 'sshauto cert' first.")
-
+        port = data.get("hysteria_port", 2096)
+        domain = data.get("hysteria_domain", "online.mobitel.lk")
         password = data.get("hysteria_password", "helloworld")
+
+        # 1. Run official install script
+        log.info("Downloading and running get.hy2.sh...")
+        result = Shell.run('bash <(curl -fsSL https://get.hy2.sh/)', check=False, timeout=120)
+        if not result.ok:
+            log.error(f"Official install failed: {result.stderr}")
+            raise Exception("Hysteria2 install script failed.")
+
+        # 2. Generate self‑signed certificate for the configured domain
+        log.info(f"Generating self‑signed certificate for {domain}...")
+        cert_dir = Path("/etc/hysteria")
+        cert_dir.mkdir(parents=True, exist_ok=True)
+        Shell.run(
+            f"openssl req -x509 -nodes -newkey rsa:2048 "
+            f"-keyout {cert_dir}/server.key -out {cert_dir}/server.crt "
+            f"-days 3650 -subj '/CN={domain}'",
+            check=True,
+            timeout=30
+        )
+
+        # 3. Write config
         config = f"""
-listen: :443
+listen: :{port}
 tls:
-  cert: {cert_path}
-  key: {key_path}
+  cert: {cert_dir}/server.crt
+  key: {cert_dir}/server.key
 auth:
   type: password
   password: "{password}"
@@ -78,83 +64,35 @@ masquerade:
     url: https://{domain}
     rewriteHost: true
 """
-        HYSTERIA_CONFIG.parent.mkdir(parents=True, exist_ok=True)
         HYSTERIA_CONFIG.write_text(config)
+        log.info(f"Hysteria2 config written (port {port}, domain {domain})")
 
-        service = f"""
-[Unit]
-Description=Hysteria2 UDP/QUIC Tunnel
-After=network.target
+        # 4. Open firewall (ufw)
+        Shell.run(f"ufw allow {port}/udp", check=False, timeout=10)
 
-[Service]
-ExecStart={HYSTERIA_BIN} server -c {HYSTERIA_CONFIG}
-Restart=always
-User=root
+        # 5. Enable and start the service
+        Shell.run("systemctl daemon-reload", check=False)
+        Shell.run("systemctl enable hysteria-server", check=False)
+        Shell.run("systemctl restart hysteria-server", check=False)
 
-[Install]
-WantedBy=multi-user.target
-"""
-        HYSTERIA_SERVICE.write_text(service)
+        status = Shell.run("systemctl is-active hysteria-server", check=False, timeout=5)
+        if status.ok and "active" in status.stdout:
+            log.success(f"Hysteria2 installed and running on UDP {port}.")
+        else:
+            log.warning("Hysteria2 service may not be active. Check 'systemctl status hysteria-server'")
 
-        Shell.run("systemctl daemon-reload", timeout=10)
-        Shell.run("systemctl enable hysteria", check=False)
-        Shell.run("systemctl start hysteria", check=False, timeout=10)
-
-        log.success("Hysteria2 installed and running on UDP 443.")
+        log.important("Client configuration:")
+        log.important(f"  Server: your_vps_ip:{port}")
+        log.important(f"  Password: {password}")
+        log.important(f"  SNI: {domain}")
+        log.important("  Allow Insecure: YES (self‑signed cert)")
 
     def remove(self) -> None:
-        Shell.run("systemctl stop hysteria", check=False)
-        Shell.run("systemctl disable hysteria", check=False)
-        HYSTERIA_BIN.unlink(missing_ok=True)
+        Shell.run("systemctl stop hysteria-server", check=False)
+        Shell.run("systemctl disable hysteria-server", check=False)
+        port = state.get("hysteria_port", 2096)
+        Shell.run(f"ufw delete allow {port}/udp", check=False)
         HYSTERIA_CONFIG.unlink(missing_ok=True)
-        HYSTERIA_SERVICE.unlink(missing_ok=True)
-        Shell.run("systemctl daemon-reload", check=False)
-        log.info("Hysteria2 removed.")
-
-    def _resolve_cert_paths(self, data: dict, domain: str):
-        # 1. Check state first
-        cert = data.get("cert_fullchain_path")
-        key = data.get("cert_key_path")
-        if cert and key and Path(cert).exists() and Path(key).exists():
-            return cert, key
-
-        # 2. Check Let's Encrypt
-        le_cert = LETSENCRYPT_LIVE / domain / "fullchain.pem"
-        le_key = LETSENCRYPT_LIVE / domain / "privkey.pem"
-        if le_cert.exists() and le_key.exists():
-            data["cert_fullchain_path"] = str(le_cert)
-            data["cert_key_path"] = str(le_key)
-            state.save(data)
-            return str(le_cert), str(le_key)
-
-        # 3. Check self-signed (from nginx/sshauto)
-        ss_cert = SSHAUTO_CERT_DIR / domain / "fullchain.pem"
-        ss_key = SSHAUTO_CERT_DIR / domain / "privkey.pem"
-        if ss_cert.exists() and ss_key.exists():
-            data["cert_fullchain_path"] = str(ss_cert)
-            data["cert_key_path"] = str(ss_key)
-            state.save(data)
-            return str(ss_cert), str(ss_key)
-
-        # 4. Check the common /etc/ssl/certs/selfsigned.crt
-        script_cert = Path("/etc/ssl/certs/selfsigned.crt")
-        script_key = Path("/etc/ssl/private/selfsigned.key")
-        if script_cert.exists() and script_key.exists():
-            data["cert_fullchain_path"] = str(script_cert)
-            data["cert_key_path"] = str(script_key)
-            state.save(data)
-            return str(script_cert), str(script_key)
-
-        # 5. Check any other locations (like /var/lib/sshauto/certs/*)
-        for base_dir in [LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR, Path("/etc/ssl/cloudflare")]:
-            if not base_dir.exists():
-                continue
-            for cert_file in base_dir.glob("*/fullchain.pem"):
-                key_file = cert_file.parent / "privkey.pem"
-                if key_file.exists():
-                    data["cert_fullchain_path"] = str(cert_file)
-                    data["cert_key_path"] = str(key_file)
-                    state.save(data)
-                    return str(cert_file), str(key_file)
-
-        return None, None
+        Path("/etc/hysteria/server.crt").unlink(missing_ok=True)
+        Path("/etc/hysteria/server.key").unlink(missing_ok=True)
+        log.info("Hysteria2 removed (binary remains).")
