@@ -4,6 +4,7 @@ ICMP Tunneling – uses ICMPTunnel from Qteam-official to tunnel TCP over ICMP (
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from core.logger import log
 from core.shell import Shell
@@ -14,7 +15,6 @@ ICMPTUNNEL_BIN = Path("/usr/local/bin/ICMPTunnel")
 ICMPTUNNEL_CONFIG = Path("/etc/icmptunnel/config.json")
 ICMPTUNNEL_SERVICE = Path("/etc/systemd/system/icmptunnel.service")
 
-# Direct download URL for ICMPTunnel v1.1.0
 ICMPTUNNEL_URL = "https://github.com/Qteam-official/ICMPTunnel/releases/download/v1.1.0/ICMPTunnel-linux-amd64"
 
 
@@ -29,12 +29,28 @@ class IcmpTunnelFeature(BaseFeature):
     def install(self) -> None:
         log.info("Installing ICMPTunnel...")
 
-        # Download the binary using the provided URL
+        # Stop service if running (to avoid "Text file busy")
+        Shell.run("systemctl stop icmptunnel", check=False, timeout=5)
+
+        # Remove old binary if it exists
+        if ICMPTUNNEL_BIN.exists():
+            ICMPTUNNEL_BIN.unlink()
+            log.debug("Removed old ICMPTunnel binary")
+
+        # Download binary with retries
         log.info(f"Downloading ICMPTunnel from: {ICMPTUNNEL_URL}")
-        result = Shell.run(f"wget -O {ICMPTUNNEL_BIN} {ICMPTUNNEL_URL}", check=False, timeout=60)
-        if not result.ok:
-            log.error(f"Failed to download ICMPTunnel: {result.stderr}")
-            raise Exception("ICMPTunnel download failed. Check network connectivity.")
+        success = False
+        for attempt in range(1, 4):
+            result = Shell.run(f"wget -O {ICMPTUNNEL_BIN} {ICMPTUNNEL_URL}", check=False, timeout=60)
+            if result.ok:
+                success = True
+                break
+            log.warning(f"Download attempt {attempt}/3 failed, retrying in 2s...")
+            time.sleep(2)
+
+        if not success:
+            log.error(f"Failed to download ICMPTunnel: {result.stderr if result else 'unknown error'}")
+            raise Exception("ICMPTunnel download failed after 3 attempts.")
 
         ICMPTUNNEL_BIN.chmod(0o755)
 
@@ -84,7 +100,6 @@ WantedBy=multi-user.target
         log.important(f"  Server IP: {domain}")
         log.important(f"  Key: {key}")
         log.important("  SOCKS5 port: 1010")
-        log.important("Use 'q-icmp' command to manage the tunnel (if install.sh was used).")
 
     def remove(self) -> None:
         Shell.run("systemctl stop icmptunnel", check=False)
