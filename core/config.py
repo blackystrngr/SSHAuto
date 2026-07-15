@@ -1,16 +1,14 @@
 """
-Single source of truth for every constant used across the project, plus
-a tiny JSON-backed StateStore so features/dashboard can persist things.
+Single source of truth for every constant used across the project.
 """
 from __future__ import annotations
 
 import json
-import os
 import threading
 from pathlib import Path
 
 # ----------------------------------------------------------------------
-# Project root – auto‑detect based on this file's location
+# Project root – auto‑detect
 # ----------------------------------------------------------------------
 APP_ROOT = Path(__file__).resolve().parent.parent
 
@@ -25,6 +23,8 @@ DROPBEAR_PORT_DEFAULT = 110
 PROXY_PORT_DEFAULT = 9955
 SQUID_PORT_DEFAULT = 3128
 STUNNEL_PORT_DEFAULT = 4443
+
+# New tunnel defaults
 HYSTERIA_PORT_DEFAULT = 443
 DNS_TUNNEL_DOMAIN_DEFAULT = "ns1.hi.blackstrngr.qzz.io"
 DNS_TUNNEL_PASSWORD_DEFAULT = "helloworld"
@@ -39,7 +39,7 @@ GIT_POLL_INTERVAL_SECONDS = 30
 REQUIRED_PACKAGES = [
     "nginx", "dropbear", "fail2ban", "iptables", "curl", "git",
     "certbot", "squid", "stunnel4", "sslh", "cron", "iodine",
-    "build-essential", "libpcap-dev"
+    "build-essential", "libpcap-dev", "wget"
 ]
 REMOVE_PACKAGES = ["apache2", "ufw", "firewalld"]
 PIP_PACKAGES = []
@@ -104,16 +104,17 @@ class StateStore:
             "proxy_port": PROXY_PORT_DEFAULT,
             "squid_port": SQUID_PORT_DEFAULT,
             "stunnel_port": STUNNEL_PORT_DEFAULT,
+            "hysteria_port": HYSTERIA_PORT_DEFAULT,
+            "hysteria_password": DNS_TUNNEL_PASSWORD_DEFAULT,
+            "dns_tunnel_domain": DNS_TUNNEL_DOMAIN_DEFAULT,
+            "dns_tunnel_password": DNS_TUNNEL_PASSWORD_DEFAULT,
+            "icmp_tunnel_port": ICMP_TUNNEL_PORT_DEFAULT,
             "custom_http_ports": [],
             "custom_https_ports": [],
             "cert_strategy": None,
             "cert_domain": None,
             "installed_features": [],
             "created_at": None,
-            "hysteria_password": "helloworld",
-            "dns_tunnel_domain": "ns1.hi.blackstrngr.qzz.io",
-            "dns_tunnel_password": "changeme",
-            "icmp_tunnel_port": 4444,
         }
 
     def ensure_defaults(self):
