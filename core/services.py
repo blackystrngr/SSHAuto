@@ -14,9 +14,9 @@ SERVICES = [
     "badvpn-udpgw",
     "stunnel4",
     "sslh",
-    "hysteria",
-    "iodine",
-    "icmptunnel",   # changed from ptunnel
+    "hysteria-server",
+    "dnstt-server",
+    "icmptunnel",
 ]
 
 
