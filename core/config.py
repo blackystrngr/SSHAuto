@@ -24,13 +24,14 @@ PROXY_PORT_DEFAULT = 9955
 SQUID_PORT_DEFAULT = 3128
 
 # New tunnel defaults – using your provided data
-HYSTERIA_PORT_DEFAULT = 2096
+HYSTERIA_PORT_DEFAULT = 443
 HYSTERIA_DOMAIN_DEFAULT = "ns1.hi.blackstrngr.qzz.io"
 HYSTERIA_PASSWORD_DEFAULT = "helloworld"
 
 DNS_TUNNEL_DOMAIN_DEFAULT = "ns1.hi.blackstrngr.qzz.io"
 DNS_TUNNEL_PASSWORD_DEFAULT = "helloworld"
 DNS_TUNNEL_MODE_DEFAULT = "socks"
+DNS_TUNNEL_PORT_DEFAULT = 5300
 
 ICMP_TUNNEL_KEY_DEFAULT = 123456
 
@@ -113,6 +114,7 @@ class StateStore:
             "dns_tunnel_domain": DNS_TUNNEL_DOMAIN_DEFAULT,
             "dns_tunnel_password": DNS_TUNNEL_PASSWORD_DEFAULT,
             "dns_tunnel_mode": DNS_TUNNEL_MODE_DEFAULT,
+            "dns_tunnel_port": DNS_TUNNEL_PORT_DEFAULT,
             "icmp_tunnel_key": ICMP_TUNNEL_KEY_DEFAULT,
             "custom_http_ports": [],
             "custom_https_ports": [],
