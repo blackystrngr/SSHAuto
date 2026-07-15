@@ -8,6 +8,7 @@ import argparse
 import datetime
 import os
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -38,10 +39,49 @@ def require_root():
         sys.exit(1)
 
 
+def _clean_old_proxy():
+    """Remove any old proxy binaries and systemd units before installation."""
+    log.info("Cleaning up old proxy files...")
+
+    # Stop and disable old services
+    for svc in ["ws-ssh-proxy", "sshauto-proxy"]:
+        Shell.run(f"systemctl stop {svc}", check=False, timeout=5)
+        Shell.run(f"systemctl disable {svc}", check=False, timeout=5)
+
+    # Remove old binaries
+    old_bins = [
+        "/usr/local/bin/ws_ssh_proxy.py",
+        "/usr/local/bin/ws_proxy.py",
+    ]
+    for path in old_bins:
+        p = Path(path)
+        if p.exists():
+            p.unlink()
+            log.debug(f"removed {path}")
+
+    # Remove old systemd service files
+    old_services = [
+        "/etc/systemd/system/ws-ssh-proxy.service",
+        "/etc/systemd/system/sshauto-proxy.service",
+    ]
+    for path in old_services:
+        p = Path(path)
+        if p.exists():
+            p.unlink()
+            log.debug(f"removed {path}")
+
+    # Reload systemd
+    Shell.run("systemctl daemon-reload", check=False, timeout=5)
+    log.success("Old proxy files cleaned.")
+
+
 def cmd_install(args):
     require_root()
     if not args.quiet:
         print(BANNER)
+
+    # Pre‑install cleanup (always runs)
+    _clean_old_proxy()
 
     manager = PluginManager()
     only = args.only.split(",") if args.only else None
@@ -65,7 +105,7 @@ def cmd_install(args):
             log.warning(f"Some features failed: {', '.join(failures)}. "
                         f"Run 'python3 main.py status' for details.")
 
-    # Post‑install: reload systemd and restart services (excluding Squid)
+    # Post‑install: reload systemd and restart services
     log.info("Reloading systemd to pick up new unit files...")
     Shell.run("systemctl daemon-reload", check=False, timeout=10)
     restart_all_services()
