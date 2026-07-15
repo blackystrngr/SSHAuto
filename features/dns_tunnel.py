@@ -30,7 +30,7 @@ class DnsTunnelFeature(BaseFeature):
         data = state.ensure_defaults()
         domain = data.get("dns_tunnel_domain", "ns1.hi.blackstrngr.qzz.io")
         dns_port = data.get("dns_tunnel_port", 5300)
-        server_ip = data.get("server_ip", "your_vps_ip")
+        server_ip = data.get("server_ip", "your_server_ip")
         target = "127.0.0.1:22"  # default target
 
         # 1. Install Go if not present
@@ -45,11 +45,11 @@ class DnsTunnelFeature(BaseFeature):
         Shell.run("chmod +x /usr/local/bin/dnstt-server", check=True)
         Shell.run("rm -rf /tmp/dnstt", check=False)
 
-        # 3. Generate DNSTT keys
+        # 3. Generate DNSTT keys (correct flags: -pubkey-file and -privkey-file)
         DNSTT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         log.info("Generating DNSTT keys...")
         Shell.run(
-            f"cd {DNSTT_CONFIG_DIR} && {DNSTT_BIN} -gen-key -pubkey {DNSTT_PUB_KEY} -privkey {DNSTT_PRIV_KEY}",
+            f"cd {DNSTT_CONFIG_DIR} && {DNSTT_BIN} -gen-key -pubkey-file {DNSTT_PUB_KEY} -privkey-file {DNSTT_PRIV_KEY}",
             check=True
         )
 
