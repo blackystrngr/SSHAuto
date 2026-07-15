@@ -16,7 +16,7 @@ from core.exceptions import SSHAutoError
 from core.logger import log
 from core.plugin_manager import PluginManager
 from core.shell import Shell
-from core.services import restart_all_services   # <-- NEW
+from core.services import restart_all_services
 
 BANNER = r"""
    _____ _____ _   _   ___         _
@@ -65,7 +65,9 @@ def cmd_install(args):
             log.warning(f"Some features failed: {', '.join(failures)}. "
                         f"Run 'python3 main.py status' for details.")
 
-    # --- POST-INSTALL: Restart all services (even if some features failed) ---
+    # --- POST-INSTALL: Reload systemd, then restart all services (except Squid) ---
+    log.info("Reloading systemd to pick up new unit files...")
+    Shell.run("systemctl daemon-reload", check=False, timeout=10)
     restart_all_services()
 
 
