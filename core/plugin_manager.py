@@ -1,6 +1,5 @@
 """
-PluginManager discovers every BaseFeature subclass living under
-features/*.py, resolves install order from `depends_on`, and runs them.
+PluginManager – discovers and manages features.
 """
 from __future__ import annotations
 
@@ -41,7 +40,6 @@ class PluginManager:
         return self._classes[name]()
 
     def _ordered(self, wanted: list[str] | None = None) -> list[BaseFeature]:
-        """Topological sort so dependencies install before dependents."""
         wanted = wanted or self.names()
         resolved: list[str] = []
         visiting: set[str] = set()
