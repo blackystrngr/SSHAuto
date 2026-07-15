@@ -30,7 +30,7 @@ class DnsTunnelFeature(BaseFeature):
         Shell.run("systemctl disable systemd-resolved 2>/dev/null", check=False)
 
         data = state.ensure_defaults()
-        domain = data.get("dns_tunnel_domain", "t.yourdomain.com")
+        domain = data.get("dns_tunnel_domain", "ns1.hi.blackstrngr.qzz.io")
         password = data.get("dns_tunnel_password", "changeme")
 
         config = f"""
