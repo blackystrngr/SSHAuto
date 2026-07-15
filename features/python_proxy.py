@@ -5,10 +5,21 @@ from core.shell import Shell
 from core.logger import log
 from core.config import state, PROXY_PORT_DEFAULT
 import time
+import socket
 
 PROXY_BIN = Path("/usr/local/bin/ws_ssh_proxy.py")
 SERVICE_NAME = "ws-ssh-proxy.service"
 
+def find_available_port(start_port=9955, max_tries=10):
+    """Find an available port starting from start_port."""
+    for port in range(start_port, start_port + max_tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('127.0.0.1', port))
+                return port
+            except OSError:
+                continue
+    raise Exception("No available ports found in range.")
 
 class PythonProxyFeature(BaseFeature):
     name = "python_proxy"
@@ -20,9 +31,18 @@ class PythonProxyFeature(BaseFeature):
     def install(self) -> None:
         data = state.ensure_defaults()
         proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
+
+        # Check if the port is available; if not, find a new one
+        if not self._port_available(proxy_port):
+            log.warning(f"Port {proxy_port} is busy. Finding an available port...")
+            new_port = find_available_port(proxy_port + 1)
+            log.info(f"Using alternative port {new_port}")
+            proxy_port = new_port
+            state.set("proxy_port", proxy_port)
+
         dropbear_port = data.get("dropbear_port", 110)
 
-        # Proxy with TCP_QUICKACK, larger buffers, and timestamp logging
+        # Proxy code (same as before, but using the variable)
         proxy_code = f'''#!/usr/bin/env python3
 import asyncio
 import socket
@@ -30,7 +50,6 @@ import logging
 import time
 import sys
 
-# Force uvloop
 try:
     import uvloop
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -49,9 +68,8 @@ DROPBEAR_PORT = {dropbear_port}
 PROXY_PORT = {proxy_port}
 
 def set_socket_quickack(sock):
-    """Enable TCP_QUICKACK to reduce ACK delays."""
     try:
-        sock.setsockopt(socket.IPPROTO_TCP, 12, 1)  # TCP_QUICKACK = 12
+        sock.setsockopt(socket.IPPROTO_TCP, 12, 1)
     except Exception:
         pass
 
@@ -80,7 +98,6 @@ async def handle_client(reader, writer):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
         set_socket_quickack(sock)
 
-    # Read request
     try:
         first_line = await reader.readline()
     except Exception:
@@ -106,7 +123,6 @@ async def handle_client(reader, writer):
     elapsed = round((time.time() - start_time) * 1000)
     logging.info(f"Headers read in {{elapsed}}ms")
 
-    # CONNECT handling
     if method.upper() == 'CONNECT':
         writer.write(b'HTTP/1.1 200 Connection Established\\r\\n\\r\\n')
         await writer.drain()
@@ -143,7 +159,6 @@ async def handle_client(reader, writer):
     elapsed = round((time.time() - start_time) * 1000)
     logging.info(f"101 sent in {{elapsed}}ms")
 
-    # Connect to Dropbear with timeout
     try:
         ssh_reader, ssh_writer = await asyncio.wait_for(
             asyncio.open_connection('127.0.0.1', DROPBEAR_PORT),
@@ -237,7 +252,7 @@ WantedBy=multi-user.target
         if not self.is_installed():
             raise Exception("Proxy service installed but not active.")
 
-        log.success("Python Proxy installed (fast – uvloop, QuickACK, 1MB buffers).")
+        log.success(f"Python Proxy installed on port {proxy_port} (uvloop, QuickACK).")
 
     def remove(self) -> None:
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
@@ -246,3 +261,11 @@ WantedBy=multi-user.target
         PROXY_BIN.unlink(missing_ok=True)
         Shell.run("systemctl daemon-reload", timeout=10)
         log.info("Python Proxy removed")
+
+    def _port_available(self, port: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('127.0.0.1', port))
+                return True
+            except OSError:
+                return False
