@@ -16,8 +16,7 @@ SERVICES = [
     "ws-ssh-proxy",
     "badvpn-udpgw",
     "stunnel4",
-    "sslh",
-    "haproxy",   # optional
+    "sslh", 
 ]
 
 def restart_service(service: str) -> bool:
