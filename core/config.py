@@ -22,7 +22,6 @@ SSH_PORT_DEFAULT = 22
 DROPBEAR_PORT_DEFAULT = 110
 PROXY_PORT_DEFAULT = 9955
 SQUID_PORT_DEFAULT = 3128
-STUNNEL_PORT_DEFAULT = 4443
 
 # New tunnel defaults – using your provided data
 HYSTERIA_PORT_DEFAULT = 2096
@@ -39,11 +38,11 @@ USER_GROUP = "sshauto-users"
 GIT_POLL_INTERVAL_SECONDS = 30
 
 # ----------------------------------------------------------------------
-# Package Management
+# Package Management – removed stunnel4
 # ----------------------------------------------------------------------
 REQUIRED_PACKAGES = [
     "nginx", "dropbear", "fail2ban", "iptables", "curl", "git",
-    "certbot", "squid", "stunnel4", "sslh", "cron", "iodine",
+    "certbot", "squid", "sslh", "cron", "iodine",
     "build-essential", "libpcap-dev", "wget", "ufw", "golang-go"
 ]
 REMOVE_PACKAGES = ["apache2", "ufw", "firewalld"]
@@ -108,7 +107,6 @@ class StateStore:
             "dropbear_port": DROPBEAR_PORT_DEFAULT,
             "proxy_port": PROXY_PORT_DEFAULT,
             "squid_port": SQUID_PORT_DEFAULT,
-            "stunnel_port": STUNNEL_PORT_DEFAULT,
             "hysteria_port": HYSTERIA_PORT_DEFAULT,
             "hysteria_domain": HYSTERIA_DOMAIN_DEFAULT,
             "hysteria_password": HYSTERIA_PASSWORD_DEFAULT,
