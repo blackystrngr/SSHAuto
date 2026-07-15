@@ -4,7 +4,7 @@ Hysteria2 – UDP/QUIC tunnel (high-performance, bypasses TCP interception).
 from __future__ import annotations
 
 from pathlib import Path
-from core.config import state, LETSENCRYPT_LIVE
+from core.config import state, LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
@@ -13,7 +13,6 @@ HYSTERIA_BIN = Path("/usr/local/bin/hysteria")
 HYSTERIA_CONFIG = Path("/etc/hysteria/config.yaml")
 HYSTERIA_SERVICE = Path("/etc/systemd/system/hysteria.service")
 
-# Direct download URL for Hysteria2 v2.10.0
 HYSTERIA_URL = "https://github.com/apernet/hysteria/releases/download/app%2Fv2.10.0/hysteria-linux-amd64"
 
 
@@ -28,31 +27,31 @@ class Hysteria2Feature(BaseFeature):
     def install(self) -> None:
         log.info("Installing Hysteria2...")
 
-        # Download the binary using the provided URL
+        # Download binary
         log.info(f"Downloading Hysteria2 from: {HYSTERIA_URL}")
         result = Shell.run(f"wget -O {HYSTERIA_BIN} {HYSTERIA_URL}", check=False, timeout=60)
         if not result.ok:
             log.error(f"Failed to download Hysteria2: {result.stderr}")
-            raise Exception("Hysteria2 download failed. Check network connectivity.")
-
+            raise Exception("Hysteria2 download failed.")
         HYSTERIA_BIN.chmod(0o755)
 
+        # Resolve certificate paths (same logic as nginx_relay)
         data = state.ensure_defaults()
         domain = data.get("cert_domain")
         if not domain:
             raise Exception("No domain set. Run 'sshauto cert' first.")
 
-        cert = LETSENCRYPT_LIVE / domain / "fullchain.pem"
-        key = LETSENCRYPT_LIVE / domain / "privkey.pem"
-        if not cert.exists() or not key.exists():
+        cert_path, key_path = self._resolve_cert_paths(data, domain)
+        if not cert_path or not key_path:
             raise Exception("Certificate not found. Run 'sshauto cert' first.")
 
         password = data.get("hysteria_password", "helloworld")
+
         config = f"""
 listen: :443
 tls:
-  cert: {cert}
-  key: {key}
+  cert: {cert_path}
+  key: {key_path}
 auth:
   type: password
   password: "{password}"
@@ -94,3 +93,51 @@ WantedBy=multi-user.target
         HYSTERIA_SERVICE.unlink(missing_ok=True)
         Shell.run("systemctl daemon-reload", check=False)
         log.info("Hysteria2 removed.")
+
+    def _resolve_cert_paths(self, data: dict, domain: str):
+        # 1. Check state first
+        cert = data.get("cert_fullchain_path")
+        key = data.get("cert_key_path")
+        if cert and key and Path(cert).exists() and Path(key).exists():
+            return cert, key
+
+        # 2. Check Let's Encrypt
+        le_cert = LETSENCRYPT_LIVE / domain / "fullchain.pem"
+        le_key = LETSENCRYPT_LIVE / domain / "privkey.pem"
+        if le_cert.exists() and le_key.exists():
+            data["cert_fullchain_path"] = str(le_cert)
+            data["cert_key_path"] = str(le_key)
+            state.save(data)
+            return str(le_cert), str(le_key)
+
+        # 3. Check self-signed (from nginx/sshauto)
+        ss_cert = SSHAUTO_CERT_DIR / domain / "fullchain.pem"
+        ss_key = SSHAUTO_CERT_DIR / domain / "privkey.pem"
+        if ss_cert.exists() and ss_key.exists():
+            data["cert_fullchain_path"] = str(ss_cert)
+            data["cert_key_path"] = str(ss_key)
+            state.save(data)
+            return str(ss_cert), str(ss_key)
+
+        # 4. Check the common /etc/ssl/certs/selfsigned.crt
+        script_cert = Path("/etc/ssl/certs/selfsigned.crt")
+        script_key = Path("/etc/ssl/private/selfsigned.key")
+        if script_cert.exists() and script_key.exists():
+            data["cert_fullchain_path"] = str(script_cert)
+            data["cert_key_path"] = str(script_key)
+            state.save(data)
+            return str(script_cert), str(script_key)
+
+        # 5. Check any other locations (like /var/lib/sshauto/certs/*)
+        for base_dir in [LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR, Path("/etc/ssl/cloudflare")]:
+            if not base_dir.exists():
+                continue
+            for cert_file in base_dir.glob("*/fullchain.pem"):
+                key_file = cert_file.parent / "privkey.pem"
+                if key_file.exists():
+                    data["cert_fullchain_path"] = str(cert_file)
+                    data["cert_key_path"] = str(key_file)
+                    state.save(data)
+                    return str(cert_file), str(key_file)
+
+        return None, None
