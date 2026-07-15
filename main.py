@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core.config import state, get_public_ip
+from core.config import state
 from core.exceptions import SSHAutoError
 from core.logger import log
 from core.plugin_manager import PluginManager
@@ -83,18 +83,6 @@ def cmd_install(args):
     if not data.get("created_at"):
         data["created_at"] = datetime.datetime.utcnow().isoformat()
         state.save(data)
-
-    # ---- Auto‑detect / prompt for server IP ----
-    if data.get("server_ip", "0.0.0.0") == "0.0.0.0":
-        ip = get_public_ip()
-        if ip and ip != "0.0.0.0":
-            log.info(f"Auto‑detected server IP: {ip}")
-            state.set("server_ip", ip)
-        else:
-            log.warning("Could not auto‑detect server IP.")
-            ip = input("Enter your server's public IPv4 address (e.g., 161.118.233.8): ").strip()
-            if ip:
-                state.set("server_ip", ip)
 
     results = manager.install_all(only=only, force=args.force)
 
