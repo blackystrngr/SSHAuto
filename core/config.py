@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
+import requests
 
 # ----------------------------------------------------------------------
 # Project root – auto‑detect
@@ -23,15 +24,14 @@ DROPBEAR_PORT_DEFAULT = 110
 PROXY_PORT_DEFAULT = 9955
 SQUID_PORT_DEFAULT = 3128
 
-# New tunnel defaults – using your provided data
-HYSTERIA_PORT_DEFAULT = 443
+# New tunnel defaults
+HYSTERIA_PORT_DEFAULT = 8443
 HYSTERIA_DOMAIN_DEFAULT = "ns1.hi.blackstrngr.qzz.io"
 HYSTERIA_PASSWORD_DEFAULT = "helloworld"
 
+DNS_TUNNEL_PORT_DEFAULT = 5300
 DNS_TUNNEL_DOMAIN_DEFAULT = "ns1.hi.blackstrngr.qzz.io"
 DNS_TUNNEL_PASSWORD_DEFAULT = "helloworld"
-DNS_TUNNEL_MODE_DEFAULT = "socks"
-DNS_TUNNEL_PORT_DEFAULT = 5300
 
 ICMP_TUNNEL_KEY_DEFAULT = 123456
 
@@ -39,7 +39,7 @@ USER_GROUP = "sshauto-users"
 GIT_POLL_INTERVAL_SECONDS = 30
 
 # ----------------------------------------------------------------------
-# Package Management – removed stunnel4
+# Package Management
 # ----------------------------------------------------------------------
 REQUIRED_PACKAGES = [
     "nginx", "dropbear", "fail2ban", "iptables", "curl", "git",
@@ -68,6 +68,24 @@ SYSTEMD_DIR = Path("/etc/systemd/system")
 
 FAIL2BAN_FILTER_DIR = Path("/etc/fail2ban/filter.d")
 FAIL2BAN_JAIL_LOCAL = Path("/etc/fail2ban/jail.local")
+
+SERVER_IP_DEFAULT = "0.0.0.0"
+
+def get_public_ip() -> str:
+    """Auto‑detect the server's public IPv4 address."""
+    try:
+        ip = requests.get('https://api.ipify.org', timeout=5).text.strip()
+        if ip:
+            return ip
+    except Exception:
+        pass
+    try:
+        ip = requests.get('https://ifconfig.me/ip', timeout=5).text.strip()
+        if ip:
+            return ip
+    except Exception:
+        pass
+    return SERVER_IP_DEFAULT
 
 
 class StateStore:
@@ -111,11 +129,11 @@ class StateStore:
             "hysteria_port": HYSTERIA_PORT_DEFAULT,
             "hysteria_domain": HYSTERIA_DOMAIN_DEFAULT,
             "hysteria_password": HYSTERIA_PASSWORD_DEFAULT,
+            "dns_tunnel_port": DNS_TUNNEL_PORT_DEFAULT,
             "dns_tunnel_domain": DNS_TUNNEL_DOMAIN_DEFAULT,
             "dns_tunnel_password": DNS_TUNNEL_PASSWORD_DEFAULT,
-            "dns_tunnel_mode": DNS_TUNNEL_MODE_DEFAULT,
-            "dns_tunnel_port": DNS_TUNNEL_PORT_DEFAULT,
             "icmp_tunnel_key": ICMP_TUNNEL_KEY_DEFAULT,
+            "server_ip": get_public_ip(),
             "custom_http_ports": [],
             "custom_https_ports": [],
             "cert_strategy": None,
