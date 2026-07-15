@@ -22,24 +22,27 @@ class PythonProxyFeature(BaseFeature):
         proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
         dropbear_port = data.get("dropbear_port", 110)
 
-        # Optimised proxy code – uvloop, fast connect, minimal retries
+        # Fast proxy with uvloop, no retries, no delays
         proxy_code = f'''#!/usr/bin/env python3
 import asyncio
 import socket
 import logging
+import sys
 
-# Try to use uvloop for faster event loop
+# Force uvloop if available
 try:
     import uvloop
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    uvloop_used = True
 except ImportError:
-    pass
+    uvloop_used = False
 
 logging.basicConfig(
     filename='/var/log/sshauto/proxy.log',
     level=logging.INFO,
     format='%(asctime)s %(levelname)s %(message)s'
 )
+logging.info(f"Proxy starting, uvloop: {{uvloop_used}}")
 
 DROPBEAR_PORT = {dropbear_port}
 PROXY_PORT = {proxy_port}
@@ -67,7 +70,7 @@ async def handle_client(reader, writer):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
 
-    # Read first line and headers
+    # Read the request line (CONNECT or GET)
     try:
         first_line = await reader.readline()
     except Exception:
@@ -80,6 +83,7 @@ async def handle_client(reader, writer):
     parts = first_line.decode().strip().split()
     method = parts[0] if len(parts) > 0 else ''
 
+    # Read headers
     headers = {{}}
     while True:
         line = await reader.readline()
@@ -88,11 +92,11 @@ async def handle_client(reader, writer):
         key, value = line.decode().strip().split(':', 1)
         headers[key.lower()] = value.strip()
 
-    # Handle CONNECT: respond 200 OK and read the next request (Upgrade)
+    # Handle CONNECT: respond 200 and expect Upgrade next
     if method.upper() == 'CONNECT':
-        logging.info(f"CONNECT from {{peername}}")
         writer.write(b'HTTP/1.1 200 Connection Established\\r\\n\\r\\n')
         await writer.drain()
+        # Read the next request
         try:
             first_line = await reader.readline()
             if not first_line:
@@ -114,35 +118,26 @@ async def handle_client(reader, writer):
 
     # Check for Upgrade: websocket
     upgrade = headers.get('upgrade', '').lower()
-    if upgrade == 'websocket':
-        logging.info(f"WebSocket upgrade from {{peername}}")
-        writer.write(b'HTTP/1.1 101 Switching Protocols\\r\\n')
-        writer.write(b'Upgrade: websocket\\r\\n')
-        writer.write(b'Connection: Upgrade\\r\\n')
-        writer.write(b'\\r\\n')
-        await writer.drain()
-    else:
+    if upgrade != 'websocket':
         writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
         writer.close()
         return
 
-    # Connect to Dropbear with a short timeout and one retry
-    ssh_reader = ssh_writer = None
-    for attempt in range(2):  # only 2 attempts total
-        try:
-            ssh_reader, ssh_writer = await asyncio.wait_for(
-                asyncio.open_connection('127.0.0.1', DROPBEAR_PORT),
-                timeout=2.0
-            )
-            break
-        except Exception as e:
-            logging.warning(f"Dropbear connection attempt {{attempt+1}} failed: {{e}}")
-            if attempt < 1:
-                await asyncio.sleep(0.5)
-            else:
-                writer.close()
-                return
-    if not ssh_reader:
+    # Send 101 upgrade
+    writer.write(b'HTTP/1.1 101 Switching Protocols\\r\\n')
+    writer.write(b'Upgrade: websocket\\r\\n')
+    writer.write(b'Connection: Upgrade\\r\\n')
+    writer.write(b'\\r\\n')
+    await writer.drain()
+
+    # Connect to Dropbear – one attempt, 2s timeout
+    try:
+        ssh_reader, ssh_writer = await asyncio.wait_for(
+            asyncio.open_connection('127.0.0.1', DROPBEAR_PORT),
+            timeout=2.0
+        )
+    except Exception as e:
+        logging.error(f"Dropbear connection failed: {{e}}")
         writer.close()
         return
 
@@ -180,7 +175,7 @@ async def main():
         except:
             pass
 
-    logging.info(f"Proxy listening on 127.0.0.1:{{PROXY_PORT}} (uvloop active)")
+    logging.info(f"Proxy listening on 127.0.0.1:{{PROXY_PORT}} (uvloop: {{uvloop_used}})")
     async with server:
         await server.serve_forever()
 
@@ -192,14 +187,14 @@ if __name__ == '__main__':
 
         # Systemd service
         service_content = f"""[Unit]
-Description=Forced-Upgrade TCP Proxy to SSH (Fast)
+Description=Fast TCP Proxy to SSH (uvloop)
 After=network.target dropbear-tunnel.service
 Wants=dropbear-tunnel.service
 
 [Service]
 ExecStart=/usr/bin/python3 {PROXY_BIN}
 Restart=always
-RestartSec=3
+RestartSec=2
 User=root
 StandardOutput=append:/var/log/sshauto/proxy.log
 StandardError=append:/var/log/sshauto/proxy.log
@@ -215,24 +210,17 @@ WantedBy=multi-user.target
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
         Shell.run(f"systemctl reset-failed {SERVICE_NAME}", check=False, timeout=10)
 
-        # Start with retries
-        success = False
-        for attempt in range(3):
-            result = Shell.run(f"systemctl start {SERVICE_NAME}", check=False, timeout=10)
-            if result.ok:
-                success = True
-                break
-            log.info(f"proxy start attempt {attempt+1}/3 failed, retrying...")
-            time.sleep(1)
-
-        if not success:
-            Shell.run(f"systemctl status {SERVICE_NAME}", check=False)
-            raise Exception("Proxy failed to start after multiple attempts.")
+        # Start once – no retries, just one go
+        result = Shell.run(f"systemctl start {SERVICE_NAME}", check=False, timeout=10)
+        if not result.ok:
+            log.error(f"Proxy start failed: {result.stderr}")
+            Shell.run(f"journalctl -u {SERVICE_NAME} --no-pager -n 10", check=False)
+            raise Exception("Proxy failed to start.")
 
         if not self.is_installed():
             raise Exception("Proxy service installed but not active.")
 
-        log.success("Python Proxy installed (fast – uvloop, short timeouts).")
+        log.success("Python Proxy installed (fast – uvloop, no delays).")
 
     def remove(self) -> None:
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
