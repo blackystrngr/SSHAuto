@@ -7,7 +7,6 @@ import time
 from core.logger import log
 from core.shell import Shell
 
-# List of services to restart (Squid is excluded because it times out)
 SERVICES = [
     "nginx",
     "dropbear-tunnel",
@@ -20,20 +19,18 @@ SERVICES = [
     "ptunnel",
 ]
 
+
 def restart_service(service: str) -> bool:
-    """Restart a single service with soft stop, fallback to force kill."""
     check = Shell.run(f"systemctl status {service}", check=False, timeout=5)
     if "Unit" in check.stdout and "not found" in check.stdout:
         log.debug(f"{service} not installed, skipping.")
         return True
 
-    # Try normal restart
     result = Shell.run(f"systemctl restart {service}", check=False, timeout=15)
     if result.ok:
         log.success(f"{service} restarted.")
         return True
 
-    # If restart failed, try stop + start
     log.warning(f"{service} restart failed (exit {result.returncode}). Trying stop/start...")
     stop = Shell.run(f"systemctl stop {service}", check=False, timeout=10)
     if not stop.ok and "timed out" in stop.stderr:
@@ -48,8 +45,8 @@ def restart_service(service: str) -> bool:
         log.error(f"{service} failed to start: {start.stderr}")
         return False
 
+
 def restart_all_services() -> None:
-    """Restart every service in the list, log success/failure."""
     log.important("Restarting all services (excluding Squid)...")
     results = {}
     for svc in SERVICES:
