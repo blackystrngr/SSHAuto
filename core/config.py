@@ -69,7 +69,7 @@ SYSTEMD_DIR = Path("/etc/systemd/system")
 FAIL2BAN_FILTER_DIR = Path("/etc/fail2ban/filter.d")
 FAIL2BAN_JAIL_LOCAL = Path("/etc/fail2ban/jail.local")
 
-SERVER_IP_DEFAULT = "0.0.0.0"
+SERVER_IP_DEFAULT = "your_server_ip"
 
 def get_public_ip() -> str:
     """Auto‑detect the server's public IPv4 address."""
