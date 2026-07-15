@@ -38,7 +38,8 @@ GIT_POLL_INTERVAL_SECONDS = 30
 # ----------------------------------------------------------------------
 REQUIRED_PACKAGES = [
     "nginx", "dropbear", "fail2ban", "iptables", "curl", "git",
-    "certbot", "squid", "stunnel4", "sslh",  "cron"
+    "certbot", "squid", "stunnel4", "sslh", "cron", "iodine",
+    "build-essential", "libpcap-dev"
 ]
 REMOVE_PACKAGES = ["apache2", "ufw", "firewalld"]
 PIP_PACKAGES = []
@@ -110,7 +111,7 @@ class StateStore:
             "installed_features": [],
             "created_at": None,
             "hysteria_password": "helloworld",
-            "dns_tunnel_domain": "t.yourdomain.com",
+            "dns_tunnel_domain": "ns1.hi.blackstrngr.qzz.io",
             "dns_tunnel_password": "changeme",
             "icmp_tunnel_port": 4444,
         }
