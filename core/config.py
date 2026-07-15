@@ -34,7 +34,7 @@ GIT_POLL_INTERVAL_SECONDS = 30
 # ----------------------------------------------------------------------
 REQUIRED_PACKAGES = [
     "nginx", "dropbear", "fail2ban", "iptables", "curl", "git",
-    "certbot", "squid", "stunnel4", "sslh", "haproxy", "cron"
+    "certbot", "squid", "stunnel4", "sslh",  "cron"
 ]
 REMOVE_PACKAGES = ["apache2", "ufw", "firewalld"]
 PIP_PACKAGES = []
