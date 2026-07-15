@@ -105,6 +105,10 @@ class StateStore:
             "cert_domain": None,
             "installed_features": [],
             "created_at": None,
+            "hysteria_password": "helloworld",
+            "dns_tunnel_domain": "t.yourdomain.com",
+            "dns_tunnel_password": "changeme",
+            "icmp_tunnel_port": 4444,
         }
 
     def ensure_defaults(self):
