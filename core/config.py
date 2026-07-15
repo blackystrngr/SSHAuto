@@ -1,8 +1,6 @@
 """
 Single source of truth for every constant used across the project, plus
-a tiny JSON-backed StateStore so features/dashboard can persist things
-(current dropbear port, custom ports, chosen cert strategy, domain...)
-without a database.
+a tiny JSON-backed StateStore so features/dashboard can persist things.
 """
 from __future__ import annotations
 
@@ -12,16 +10,21 @@ import threading
 from pathlib import Path
 
 # ----------------------------------------------------------------------
+# Project root – auto‑detect based on this file's location
+# ----------------------------------------------------------------------
+APP_ROOT = Path(__file__).resolve().parent.parent
+
+# ----------------------------------------------------------------------
 # Network layout
 # ----------------------------------------------------------------------
 HTTP_PORTS = {80, 8080, 8880, 2052, 2082, 2086, 2095}
 HTTPS_PORTS = {443, 8443, 2053, 2083, 2087, 2096}
 
-SSH_PORT_DEFAULT = 22                 # real OpenSSH, direct access
-DROPBEAR_PORT_DEFAULT = 110           # dropbear tunnel backend
-PROXY_PORT_DEFAULT = 9955             # Python asyncio proxy
-SQUID_PORT_DEFAULT = 3128             # Squid HTTP proxy (internal)
-STUNNEL_PORT_DEFAULT = 4443           # stunnel SSL tunnel (internal)
+SSH_PORT_DEFAULT = 22
+DROPBEAR_PORT_DEFAULT = 110
+PROXY_PORT_DEFAULT = 9955
+SQUID_PORT_DEFAULT = 3128
+STUNNEL_PORT_DEFAULT = 4443
 
 USER_GROUP = "sshauto-users"
 GIT_POLL_INTERVAL_SECONDS = 30
@@ -30,17 +33,8 @@ GIT_POLL_INTERVAL_SECONDS = 30
 # Package Management
 # ----------------------------------------------------------------------
 REQUIRED_PACKAGES = [
-    "nginx",
-    "dropbear",
-    "fail2ban",
-    "iptables",
-    "curl",
-    "git",
-    "certbot",
-    "squid",
-    "stunnel4",
-    "sslh",
-    "cron"
+    "nginx", "dropbear", "fail2ban", "iptables", "curl", "git",
+    "certbot", "squid", "stunnel4", "sslh", "haproxy", "cron"
 ]
 REMOVE_PACKAGES = ["apache2", "ufw", "firewalld"]
 PIP_PACKAGES = []
@@ -50,18 +44,16 @@ PIP_PACKAGES = []
 # ----------------------------------------------------------------------
 NGINX_SITES_AVAILABLE = Path("/etc/nginx/sites-available")
 NGINX_SITES_ENABLED = Path("/etc/nginx/sites-enabled")
-NGINX_RELAY_NAME = "sshauto-relay"   # not used now; we use "ssh_tunnel" in nginx_relay.py
+NGINX_RELAY_NAME = "sshauto-relay"
 
 SSHD_CONFIG = Path("/etc/ssh/sshd_config")
 SSH_BANNER_PATH = Path("/etc/ssh/sshd_banner")
 DROPBEAR_BANNER_PATH = Path("/etc/dropbear/banner")
 DROPBEAR_DEFAULTS_FILE = Path("/etc/default/dropbear")
-APP_ROOT = Path("/opt/sshauto")
 SSHAUTO_CERT_DIR = Path("/var/lib/sshauto/certs")
 LETSENCRYPT_LIVE = Path("/etc/letsencrypt/live")
 
 LOG_DIR = Path("/var/log/sshauto")
-LOG_DIR.mkdir(parents=True, exist_ok=True)
 SYSTEMD_DIR = Path("/etc/systemd/system")
 
 FAIL2BAN_FILTER_DIR = Path("/etc/fail2ban/filter.d")
