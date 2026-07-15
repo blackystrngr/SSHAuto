@@ -13,6 +13,9 @@ HYSTERIA_BIN = Path("/usr/local/bin/hysteria")
 HYSTERIA_CONFIG = Path("/etc/hysteria/config.yaml")
 HYSTERIA_SERVICE = Path("/etc/systemd/system/hysteria.service")
 
+# Direct download URL for Hysteria2 v2.10.0
+HYSTERIA_URL = "https://github.com/apernet/hysteria/releases/download/app%2Fv2.10.0/hysteria-linux-amd64"
+
 
 class Hysteria2Feature(BaseFeature):
     name = "hysteria2"
@@ -25,15 +28,13 @@ class Hysteria2Feature(BaseFeature):
     def install(self) -> None:
         log.info("Installing Hysteria2...")
 
-        arch = Shell.run("uname -m", check=True).stdout.strip()
-        if arch == "x86_64":
-            url = "https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
-        elif arch == "aarch64":
-            url = "https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-arm64"
-        else:
-            raise Exception(f"Unsupported arch: {arch}")
+        # Download the binary using the provided URL
+        log.info(f"Downloading Hysteria2 from: {HYSTERIA_URL}")
+        result = Shell.run(f"wget -O {HYSTERIA_BIN} {HYSTERIA_URL}", check=False, timeout=60)
+        if not result.ok:
+            log.error(f"Failed to download Hysteria2: {result.stderr}")
+            raise Exception("Hysteria2 download failed. Check network connectivity.")
 
-        Shell.run(f"wget -O {HYSTERIA_BIN} {url}", check=True)
         HYSTERIA_BIN.chmod(0o755)
 
         data = state.ensure_defaults()
