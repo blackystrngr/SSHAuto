@@ -22,14 +22,15 @@ class PythonProxyFeature(BaseFeature):
         proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
         dropbear_port = data.get("dropbear_port", 110)
 
-        # Fast proxy with uvloop, no retries, no delays
+        # Proxy with TCP_QUICKACK, larger buffers, and timestamp logging
         proxy_code = f'''#!/usr/bin/env python3
 import asyncio
 import socket
 import logging
+import time
 import sys
 
-# Force uvloop if available
+# Force uvloop
 try:
     import uvloop
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -47,7 +48,14 @@ logging.info(f"Proxy starting, uvloop: {{uvloop_used}}")
 DROPBEAR_PORT = {dropbear_port}
 PROXY_PORT = {proxy_port}
 
-async def pipe(src, dst):
+def set_socket_quickack(sock):
+    """Enable TCP_QUICKACK to reduce ACK delays."""
+    try:
+        sock.setsockopt(socket.IPPROTO_TCP, 12, 1)  # TCP_QUICKACK = 12
+    except Exception:
+        pass
+
+async def pipe(src, dst, direction=""):
     try:
         while True:
             data = await src.read(16384)
@@ -56,21 +64,23 @@ async def pipe(src, dst):
             dst.write(data)
             await dst.drain()
     except Exception as e:
-        logging.debug(f"pipe error: {{e}}")
+        logging.debug(f"pipe {{direction}} error: {{e}}")
     finally:
         dst.close()
 
 async def handle_client(reader, writer):
+    start_time = time.time()
     peername = writer.get_extra_info('peername')
     logging.info(f"New connection from {{peername}}")
 
     sock = writer.get_extra_info('socket')
     if sock:
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1048576)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
+        set_socket_quickack(sock)
 
-    # Read the request line (CONNECT or GET)
+    # Read request
     try:
         first_line = await reader.readline()
     except Exception:
@@ -79,11 +89,12 @@ async def handle_client(reader, writer):
     if not first_line:
         writer.close()
         return
+    elapsed = round((time.time() - start_time) * 1000)
+    logging.info(f"Read first_line in {{elapsed}}ms")
 
     parts = first_line.decode().strip().split()
     method = parts[0] if len(parts) > 0 else ''
 
-    # Read headers
     headers = {{}}
     while True:
         line = await reader.readline()
@@ -92,11 +103,13 @@ async def handle_client(reader, writer):
         key, value = line.decode().strip().split(':', 1)
         headers[key.lower()] = value.strip()
 
-    # Handle CONNECT: respond 200 and expect Upgrade next
+    elapsed = round((time.time() - start_time) * 1000)
+    logging.info(f"Headers read in {{elapsed}}ms")
+
+    # CONNECT handling
     if method.upper() == 'CONNECT':
         writer.write(b'HTTP/1.1 200 Connection Established\\r\\n\\r\\n')
         await writer.drain()
-        # Read the next request
         try:
             first_line = await reader.readline()
             if not first_line:
@@ -116,21 +129,21 @@ async def handle_client(reader, writer):
             writer.close()
             return
 
-    # Check for Upgrade: websocket
     upgrade = headers.get('upgrade', '').lower()
     if upgrade != 'websocket':
         writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
         writer.close()
         return
 
-    # Send 101 upgrade
     writer.write(b'HTTP/1.1 101 Switching Protocols\\r\\n')
     writer.write(b'Upgrade: websocket\\r\\n')
     writer.write(b'Connection: Upgrade\\r\\n')
     writer.write(b'\\r\\n')
     await writer.drain()
+    elapsed = round((time.time() - start_time) * 1000)
+    logging.info(f"101 sent in {{elapsed}}ms")
 
-    # Connect to Dropbear – one attempt, 2s timeout
+    # Connect to Dropbear with timeout
     try:
         ssh_reader, ssh_writer = await asyncio.wait_for(
             asyncio.open_connection('127.0.0.1', DROPBEAR_PORT),
@@ -140,25 +153,29 @@ async def handle_client(reader, writer):
         logging.error(f"Dropbear connection failed: {{e}}")
         writer.close()
         return
+    elapsed = round((time.time() - start_time) * 1000)
+    logging.info(f"Dropbear connected in {{elapsed}}ms")
 
     ssh_sock = ssh_writer.get_extra_info('socket')
     if ssh_sock:
         ssh_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
-        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
+        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1048576)
+        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
+        set_socket_quickack(ssh_sock)
 
-    logging.info(f"Tunnel established for {{peername}}")
+    logging.info(f"Tunnel established for {{peername}} ({{elapsed}}ms)")
     try:
         await asyncio.gather(
-            pipe(reader, ssh_writer),
-            pipe(ssh_reader, writer)
+            pipe(reader, ssh_writer, "client->ssh"),
+            pipe(ssh_reader, writer, "ssh->client")
         )
     except Exception as e:
         logging.error(f"Tunnel error: {{e}}")
     finally:
         writer.close()
         ssh_writer.close()
-        logging.info(f"Tunnel closed for {{peername}}")
+        total = round((time.time() - start_time) * 1000)
+        logging.info(f"Tunnel closed for {{peername}} ({{total}}ms)")
 
 async def main():
     server = await asyncio.start_server(
@@ -170,8 +187,9 @@ async def main():
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1048576)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
+            set_socket_quickack(s)
         except:
             pass
 
@@ -187,7 +205,7 @@ if __name__ == '__main__':
 
         # Systemd service
         service_content = f"""[Unit]
-Description=Fast TCP Proxy to SSH (uvloop)
+Description=Fast TCP Proxy to SSH (uvloop + QuickACK)
 After=network.target dropbear-tunnel.service
 Wants=dropbear-tunnel.service
 
@@ -210,7 +228,6 @@ WantedBy=multi-user.target
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
         Shell.run(f"systemctl reset-failed {SERVICE_NAME}", check=False, timeout=10)
 
-        # Start once – no retries, just one go
         result = Shell.run(f"systemctl start {SERVICE_NAME}", check=False, timeout=10)
         if not result.ok:
             log.error(f"Proxy start failed: {result.stderr}")
@@ -220,7 +237,7 @@ WantedBy=multi-user.target
         if not self.is_installed():
             raise Exception("Proxy service installed but not active.")
 
-        log.success("Python Proxy installed (fast – uvloop, no delays).")
+        log.success("Python Proxy installed (fast – uvloop, QuickACK, 1MB buffers).")
 
     def remove(self) -> None:
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
