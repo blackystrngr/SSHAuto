@@ -1,6 +1,5 @@
 """
-ICMP Tunneling using pingtunnel (Go‑based).
-Handles both TCP and UDP encapsulated traffic.
+ICMP Tunneling using pingtunnel (Go‑based) – compiled from source.
 """
 from __future__ import annotations
 
@@ -23,26 +22,26 @@ class IcmpTunnelFeature(BaseFeature):
         return PINGTUNNEL_BIN.exists() and PINGTUNNEL_SERVICE.exists()
 
     def install(self) -> None:
-        log.info("Installing pingtunnel ICMP tunnel...")
+        log.info("Installing pingtunnel ICMP tunnel from source...")
 
         data = state.ensure_defaults()
         key = data.get("icmp_tunnel_key", 123456)
 
-        # 1. Disable kernel ICMP replies (to avoid desync)
+        # 1. Disable kernel ICMP replies
         log.info("Disabling kernel ICMP echo replies...")
         Shell.run("sysctl -w net.ipv4.icmp_echo_ignore_all=1", check=False)
         Shell.run('echo "net.ipv4.icmp_echo_ignore_all=1" | tee -a /etc/sysctl.conf', check=False)
 
-        # 2. Install dependencies
-        Shell.run("apt-get install -y unzip wget", check=True)
+        # 2. Install Go and build tools
+        Shell.run("apt-get install -y golang-go git make", check=True)
 
-        # 3. Download and extract pingtunnel
-        log.info("Downloading pingtunnel...")
-        Shell.run("wget -O /tmp/pingtunnel.zip https://github.com/esrrhs/pingtunnel/releases/latest/download/pingtunnel_linux64.zip", check=True)
-        Shell.run("unzip -o /tmp/pingtunnel.zip -d /tmp", check=True)
-        Shell.run("mv /tmp/pingtunnel /usr/local/bin/", check=True)
+        # 3. Clone and build pingtunnel from source
+        log.info("Cloning and building pingtunnel from source...")
+        Shell.run("git clone https://github.com/esrrhs/pingtunnel.git /tmp/pingtunnel", check=True)
+        Shell.run("cd /tmp/pingtunnel && go build -o pingtunnel", check=True)
+        Shell.run("cp /tmp/pingtunnel/pingtunnel /usr/local/bin/", check=True)
         Shell.run("chmod +x /usr/local/bin/pingtunnel", check=True)
-        Shell.run("rm -f /tmp/pingtunnel.zip", check=False)
+        Shell.run("rm -rf /tmp/pingtunnel", check=False)
 
         # 4. Create systemd service
         service_content = f"""
@@ -85,6 +84,5 @@ WantedBy=multi-user.target
         PINGTUNNEL_SERVICE.unlink(missing_ok=True)
         PINGTUNNEL_BIN.unlink(missing_ok=True)
         Shell.run("systemctl daemon-reload", check=False)
-        # Re‑enable kernel ICMP replies (optional)
         Shell.run("sysctl -w net.ipv4.icmp_echo_ignore_all=0", check=False)
-        log.info("ICMP tunnel removed (kernel replies re‑enabled).")
+        log.info("ICMP tunnel removed.")
