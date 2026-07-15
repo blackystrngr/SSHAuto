@@ -30,6 +30,7 @@ class DnsTunnelFeature(BaseFeature):
         data = state.ensure_defaults()
         domain = data.get("dns_tunnel_domain", "ns1.hi.blackstrngr.qzz.io")
         dns_port = data.get("dns_tunnel_port", 5300)
+        server_ip = data.get("server_ip", "your_vps_ip")
         target = "127.0.0.1:22"  # default target
 
         # 1. Install Go if not present
@@ -44,7 +45,7 @@ class DnsTunnelFeature(BaseFeature):
         Shell.run("chmod +x /usr/local/bin/dnstt-server", check=True)
         Shell.run("rm -rf /tmp/dnstt", check=False)
 
-        # 3. Generate DNSTT cryptographic keys
+        # 3. Generate DNSTT keys
         DNSTT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         log.info("Generating DNSTT keys...")
         Shell.run(
@@ -72,7 +73,7 @@ WantedBy=multi-user.target
         DNSTT_SERVICE.write_text(service_content)
         log.info(f"Service created with UDP port {dns_port}")
 
-        # 5. Open firewall (UDP)
+        # 5. Open firewall
         Shell.run(f"ufw allow {dns_port}/udp", check=False, timeout=10)
 
         # 6. Enable and start
@@ -80,12 +81,12 @@ WantedBy=multi-user.target
         Shell.run("systemctl enable dnstt-server", check=False)
         Shell.run("systemctl start dnstt-server", check=False, timeout=10)
 
-        # 7. Show public key (for clients)
+        # 7. Show public key
         if DNSTT_PUB_KEY.exists():
             pubkey = DNSTT_PUB_KEY.read_text().strip()
             log.success("DNSTT installed.")
             log.important(f"Your DNSTT Public Key:\n{pubkey}")
-            log.important(f"Tunnel Domain: {domain}")
+            log.important(f"Tunnel Domain: {domain} (points to {server_ip})")
             log.important(f"UDP port: {dns_port}")
         else:
             log.warning("Public key not found.")
