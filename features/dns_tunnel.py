@@ -31,7 +31,7 @@ class DnsTunnelFeature(BaseFeature):
 
         data = state.ensure_defaults()
         domain = data.get("dns_tunnel_domain", "ns1.hi.blackstrngr.qzz.io")
-        password = data.get("dns_tunnel_password", "changeme")
+        password = data.get("dns_tunnel_password", "helloworld")
 
         config = f"""
 -p {password}
@@ -62,7 +62,8 @@ WantedBy=multi-user.target
         Shell.run("systemctl start iodine", check=False, timeout=10)
 
         log.success("DNS tunnel active on UDP 53.")
-        log.important("Configure your domain's NS record for the tunnel domain to point to this VPS.")
+        log.important(f"Configure your domain's NS record for {domain} to point to this VPS.")
+        log.important(f"Client: iodine -f -P {password} {domain}")
 
     def remove(self) -> None:
         Shell.run("systemctl stop iodine", check=False)
