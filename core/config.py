@@ -39,7 +39,8 @@ REQUIRED_PACKAGES = [
     "certbot",
     "squid",
     "stunnel4",
-    "sslh"
+    "sslh",
+    "cron"
 ]
 REMOVE_PACKAGES = ["apache2", "ufw", "firewalld"]
 PIP_PACKAGES = []
@@ -60,6 +61,7 @@ SSHAUTO_CERT_DIR = Path("/var/lib/sshauto/certs")
 LETSENCRYPT_LIVE = Path("/etc/letsencrypt/live")
 
 LOG_DIR = Path("/var/log/sshauto")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 SYSTEMD_DIR = Path("/etc/systemd/system")
 
 FAIL2BAN_FILTER_DIR = Path("/etc/fail2ban/filter.d")
