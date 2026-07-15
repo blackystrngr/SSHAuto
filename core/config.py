@@ -24,11 +24,17 @@ PROXY_PORT_DEFAULT = 9955
 SQUID_PORT_DEFAULT = 3128
 STUNNEL_PORT_DEFAULT = 4443
 
-# New tunnel defaults
-HYSTERIA_PORT_DEFAULT = 443
+# New tunnel defaults – using your provided data
+HYSTERIA_PORT_DEFAULT = 2096
+HYSTERIA_DOMAIN_DEFAULT = "ns1.hi.blackstrngr.qzz.io"
+HYSTERIA_PASSWORD_DEFAULT = "helloworld"
+
 DNS_TUNNEL_DOMAIN_DEFAULT = "ns1.hi.blackstrngr.qzz.io"
 DNS_TUNNEL_PASSWORD_DEFAULT = "helloworld"
+DNS_TUNNEL_MODE_DEFAULT = "socks"
+
 ICMP_TUNNEL_PORT_DEFAULT = 4444
+ICMP_TUNNEL_KEY_DEFAULT = 12345678
 
 USER_GROUP = "sshauto-users"
 GIT_POLL_INTERVAL_SECONDS = 30
@@ -39,7 +45,7 @@ GIT_POLL_INTERVAL_SECONDS = 30
 REQUIRED_PACKAGES = [
     "nginx", "dropbear", "fail2ban", "iptables", "curl", "git",
     "certbot", "squid", "stunnel4", "sslh", "cron", "iodine",
-    "build-essential", "libpcap-dev", "wget"
+    "build-essential", "libpcap-dev", "wget", "ufw"
 ]
 REMOVE_PACKAGES = ["apache2", "ufw", "firewalld"]
 PIP_PACKAGES = []
@@ -63,7 +69,6 @@ SYSTEMD_DIR = Path("/etc/systemd/system")
 
 FAIL2BAN_FILTER_DIR = Path("/etc/fail2ban/filter.d")
 FAIL2BAN_JAIL_LOCAL = Path("/etc/fail2ban/jail.local")
-SSHAUTO_CERT_DIR = Path("/var/lib/sshauto/certs")
 
 
 class StateStore:
@@ -106,14 +111,17 @@ class StateStore:
             "squid_port": SQUID_PORT_DEFAULT,
             "stunnel_port": STUNNEL_PORT_DEFAULT,
             "hysteria_port": HYSTERIA_PORT_DEFAULT,
-            "hysteria_password": DNS_TUNNEL_PASSWORD_DEFAULT,
+            "hysteria_domain": HYSTERIA_DOMAIN_DEFAULT,
+            "hysteria_password": HYSTERIA_PASSWORD_DEFAULT,
             "dns_tunnel_domain": DNS_TUNNEL_DOMAIN_DEFAULT,
             "dns_tunnel_password": DNS_TUNNEL_PASSWORD_DEFAULT,
+            "dns_tunnel_mode": DNS_TUNNEL_MODE_DEFAULT,
             "icmp_tunnel_port": ICMP_TUNNEL_PORT_DEFAULT,
+            "icmp_tunnel_key": ICMP_TUNNEL_KEY_DEFAULT,
             "custom_http_ports": [],
             "custom_https_ports": [],
             "cert_strategy": None,
-            "cert_domain": None,
+            "cert_domain": "hi.blackstrngr.qzz.io",   # your main domain
             "installed_features": [],
             "created_at": None,
         }
