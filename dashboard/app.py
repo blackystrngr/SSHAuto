@@ -50,7 +50,7 @@ class Dashboard:
             ("11", "Extra Services (Squid, stunnel, sslh, UDPGW)"),
             ("12", "Hysteria2 UDP/QUIC tunnel"),
             ("13", "DNS tunnel (iodine)"),
-            ("14", "ICMP tunnel (ICMPTunnel)"),
+            ("14", "ICMP tunnel (pingtunnel)"),
             ("0", "Exit"),
         ])
 
