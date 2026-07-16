@@ -47,7 +47,10 @@ class PythonProxyFeature(BaseFeature):
 
         dropbear_port = data.get("dropbear_port", 110)
 
-        # ----- Proxy script (unchanged, same as the fixed version) -----
+        # Ensure uvloop is installed (speeds up the proxy)
+        log.info("Installing uvloop for faster proxy...")
+        Shell.run("pip3 install uvloop --break-system-packages", check=False, timeout=30)
+
         proxy_code = f'''#!/usr/bin/env python3
 import asyncio
 import socket
@@ -259,22 +262,19 @@ if __name__ == '__main__':
         PROXY_BIN.write_text(proxy_code)
         PROXY_BIN.chmod(0o755)
 
-        # Ensure uvloop is installed
-        Shell.run("pip3 install uvloop --break-system-packages", check=False, timeout=60)
-
         service_content = f"""[Unit]
 Description=Unified Proxy (WebSocket + CONNECT)
 After=network.target dropbear-tunnel.service
 Wants=dropbear-tunnel.service
 
 [Service]
+Type=simple
 ExecStart=/usr/bin/python3 {PROXY_BIN}
 Restart=always
 RestartSec=2
 User=root
 StandardOutput=append:/var/log/sshauto/proxy.log
 StandardError=append:/var/log/sshauto/proxy.log
-TimeoutStartSec=60   # increased to 60 seconds
 
 [Install]
 WantedBy=multi-user.target
@@ -287,14 +287,14 @@ WantedBy=multi-user.target
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
         Shell.run(f"systemctl reset-failed {SERVICE_NAME}", check=False, timeout=10)
 
-        # Start and wait with longer timeout
+        # Start the service (no custom timeout, uses systemd default)
         start_result = Shell.run(f"systemctl start {SERVICE_NAME}", check=False, timeout=60)
         if not start_result.ok:
             log.error(f"Proxy start failed (exit {start_result.returncode}): {start_result.stderr}")
             Shell.run(f"journalctl -u {SERVICE_NAME} --no-pager -n 30", check=False)
             raise Exception("Proxy failed to start. See journalctl output.")
 
-        # Check status after a short wait
+        # Wait a moment for it to become active
         time.sleep(3)
         status = Shell.run(f"systemctl is-active {SERVICE_NAME}", check=False, timeout=5)
         if not status.ok or "active" not in status.stdout:
