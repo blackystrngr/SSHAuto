@@ -47,8 +47,8 @@ class PythonProxyFeature(BaseFeature):
 
         dropbear_port = data.get("dropbear_port", 110)
 
-        # Ensure uvloop is installed (speeds up the proxy)
-        log.info("Installing uvloop for faster proxy...")
+        # Install uvloop (the proxy script will import it)
+        log.info("Installing uvloop...")
         Shell.run("pip3 install uvloop --break-system-packages", check=False, timeout=30)
 
         proxy_code = f'''#!/usr/bin/env python3
@@ -262,6 +262,7 @@ if __name__ == '__main__':
         PROXY_BIN.write_text(proxy_code)
         PROXY_BIN.chmod(0o755)
 
+        # systemd service file (no custom timeouts)
         service_content = f"""[Unit]
 Description=Unified Proxy (WebSocket + CONNECT)
 After=network.target dropbear-tunnel.service
@@ -287,15 +288,15 @@ WantedBy=multi-user.target
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
         Shell.run(f"systemctl reset-failed {SERVICE_NAME}", check=False, timeout=10)
 
-        # Start the service (no custom timeout, uses systemd default)
+        # Start the service – uses systemd default timeout
         start_result = Shell.run(f"systemctl start {SERVICE_NAME}", check=False, timeout=60)
         if not start_result.ok:
             log.error(f"Proxy start failed (exit {start_result.returncode}): {start_result.stderr}")
             Shell.run(f"journalctl -u {SERVICE_NAME} --no-pager -n 30", check=False)
             raise Exception("Proxy failed to start. See journalctl output.")
 
-        # Wait a moment for it to become active
-        time.sleep(3)
+        # Give it a moment to become active
+        time.sleep(2)
         status = Shell.run(f"systemctl is-active {SERVICE_NAME}", check=False, timeout=5)
         if not status.ok or "active" not in status.stdout:
             log.error(f"Proxy service is not active (status: {status.stdout})")
