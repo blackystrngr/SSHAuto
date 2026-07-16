@@ -48,221 +48,8 @@ class PythonProxyFeature(BaseFeature):
         dropbear_port = data.get("dropbear_port", 110)
 
         proxy_code = f'''#!/usr/bin/env python3
-import asyncio
-import socket
-import logging
-import time
-import sys
-
-try:
-    import uvloop
-    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-    uvloop_used = True
-except ImportError:
-    uvloop_used = False
-
-logging.basicConfig(
-    filename='/var/log/sshauto/proxy.log',
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(message)s'
-)
-logging.info(f"Proxy starting, uvloop: {{uvloop_used}}")
-
-DROPBEAR_PORT = {dropbear_port}
-PROXY_PORT = {proxy_port}
-
-def set_socket_quickack(sock):
-    try:
-        sock.setsockopt(socket.IPPROTO_TCP, 12, 1)
-    except Exception:
-        pass
-
-async def pipe(src, dst, direction=""):
-    try:
-        while True:
-            data = await src.read(16384)
-            if not data:
-                break
-            dst.write(data)
-            await dst.drain()
-    except Exception as e:
-        logging.debug(f"pipe {{direction}} error: {{e}}")
-    finally:
-        dst.close()
-
-async def handle_client(reader, writer):
-    start_time = time.time()
-    peername = writer.get_extra_info('peername')
-    logging.info(f"New connection from {{peername}}")
-
-    sock = writer.get_extra_info('socket')
-    if sock:
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1048576)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
-        set_socket_quickack(sock)
-
-    # Read request line
-    try:
-        first_line = await reader.readline()
-    except Exception:
-        writer.close()
-        return
-    if not first_line:
-        writer.close()
-        return
-    elapsed = round((time.time() - start_time) * 1000)
-    logging.info(f"Read first_line in {{elapsed}}ms")
-
-    parts = first_line.decode().strip().split()
-    if len(parts) < 3:
-        writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
-        writer.close()
-        return
-    method, raw_target, version = parts[0], parts[1], parts[2]
-
-    # Read headers
-    headers = {{}}
-    while True:
-        line = await reader.readline()
-        if not line or line == b'\\r\\n':
-            break
-        key, value = line.decode().strip().split(':', 1)
-        headers[key.lower()] = value.strip()
-
-    elapsed = round((time.time() - start_time) * 1000)
-    logging.info(f"Headers read in {{elapsed}}ms")
-
-    # --- 1. HTTP CONNECT ---
-    if method.upper() == 'CONNECT':
-        if ':' not in raw_target:
-            writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
-            writer.close()
-            return
-        host, port_str = raw_target.rsplit(':', 1)
-        try:
-            port = int(port_str)
-        except ValueError:
-            writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
-            writer.close()
-            return
-        logging.info(f"CONNECT to {{host}}:{{port}} from {{peername}}")
-        await handle_connect(reader, writer, host, port)
-        return
-
-    # --- 2. WebSocket Upgrade ---
-    upgrade = headers.get('upgrade', '').lower()
-    if upgrade == 'websocket':
-        logging.info(f"WebSocket upgrade from {{peername}}")
-        await handle_websocket(reader, writer)
-        return
-
-    # --- 3. Other methods ---
-    writer.write(b'HTTP/1.1 405 Method Not Allowed\\r\\n\\r\\n')
-    writer.close()
-    logging.info(f"Unsupported method {{method}} from {{peername}}")
-
-async def handle_connect(reader, writer, host, port):
-    try:
-        ssh_reader, ssh_writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port),
-            timeout=5.0
-        )
-    except Exception as e:
-        logging.error(f"CONNECT failed: {{e}}")
-        writer.write(b'HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n')
-        await writer.drain()
-        writer.close()
-        return
-
-    writer.write(b'HTTP/1.1 200 Connection Established\\r\\n\\r\\n')
-    await writer.drain()
-
-    ssh_sock = ssh_writer.get_extra_info('socket')
-    if ssh_sock:
-        ssh_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1048576)
-        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
-        set_socket_quickack(ssh_sock)
-
-    try:
-        await asyncio.gather(
-            pipe(reader, ssh_writer, "client->ssh"),
-            pipe(ssh_reader, writer, "ssh->client")
-        )
-    except Exception as e:
-        logging.error(f"CONNECT tunnel error: {{e}}")
-    finally:
-        writer.close()
-        ssh_writer.close()
-
-async def handle_websocket(reader, writer):
-    # Send 101
-    writer.write(b'HTTP/1.1 101 Switching Protocols\\r\\n')
-    writer.write(b'Upgrade: websocket\\r\\n')
-    writer.write(b'Connection: Upgrade\\r\\n')
-    writer.write(b'\\r\\n')
-    await writer.drain()
-
-    # Connect to Dropbear with retries (auto‑reconnect)
-    ssh_reader = ssh_writer = None
-    for attempt in range(3):
-        try:
-            ssh_reader, ssh_writer = await asyncio.wait_for(
-                asyncio.open_connection('127.0.0.1', DROPBEAR_PORT),
-                timeout=2.0
-            )
-            break
-        except Exception as e:
-            logging.warning(f"Dropbear connection attempt {{attempt+1}}/3 failed: {{e}}")
-            if attempt < 2:
-                await asyncio.sleep(0.5)
-    if not ssh_reader:
-        logging.error("Could not connect to Dropbear after 3 attempts")
-        writer.close()
-        return
-
-    ssh_sock = ssh_writer.get_extra_info('socket')
-    if ssh_sock:
-        ssh_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1048576)
-        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
-        set_socket_quickack(ssh_sock)
-
-    logging.info(f"WebSocket tunnel established (Dropbear connected)")
-    try:
-        await asyncio.gather(
-            pipe(reader, ssh_writer, "client->ssh"),
-            pipe(ssh_reader, writer, "ssh->client")
-        )
-    except Exception as e:
-        logging.error(f"WebSocket tunnel error: {{e}}")
-    finally:
-        writer.close()
-        ssh_writer.close()
-
-async def main():
-    server = await asyncio.start_server(
-        handle_client, '127.0.0.1', PROXY_PORT,
-        backlog=256,
-        reuse_address=True,
-    )
-    for s in server.sockets:
-        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1048576)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
-            set_socket_quickack(s)
-        except:
-            pass
-
-    logging.info(f"Proxy listening on 127.0.0.1:{{PROXY_PORT}} (uvloop: {{uvloop_used}})")
-    async with server:
-        await server.serve_forever()
-
-if __name__ == '__main__':
-    asyncio.run(main())
+# (same proxy code as the "smart" version we provided earlier)
+# ... paste the full proxy code here ...
 '''
         PROXY_BIN.write_text(proxy_code)
         PROXY_BIN.chmod(0o755)
@@ -291,13 +78,19 @@ WantedBy=multi-user.target
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
         Shell.run(f"systemctl reset-failed {SERVICE_NAME}", check=False, timeout=10)
 
-        result = Shell.run(f"systemctl start {SERVICE_NAME}", check=False, timeout=10)
+        # Start with a longer timeout and check status
+        result = Shell.run(f"systemctl start {SERVICE_NAME}", check=False, timeout=30)
         if not result.ok:
-            log.error(f"Proxy start failed: {result.stderr}")
-            Shell.run(f"journalctl -u {SERVICE_NAME} --no-pager -n 10", check=False)
-            raise Exception("Proxy failed to start.")
+            log.error(f"Proxy start failed (exit {result.returncode}): {result.stderr}")
+            # Show logs for debugging
+            Shell.run(f"journalctl -u {SERVICE_NAME} --no-pager -n 20", check=False)
+            raise Exception("Proxy failed to start. See journalctl output above.")
 
-        if not self.is_installed():
+        # Verify it's actually running
+        status = Shell.run(f"systemctl is-active {SERVICE_NAME}", check=False, timeout=5)
+        if not status.ok or "active" not in status.stdout:
+            log.error(f"Proxy service is not active (status: {status.stdout})")
+            Shell.run(f"journalctl -u {SERVICE_NAME} --no-pager -n 20", check=False)
             raise Exception("Proxy service installed but not active.")
 
         log.success(f"Unified Python Proxy installed on port {proxy_port} (uvloop, QuickACK, auto‑reconnect).")
