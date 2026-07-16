@@ -20,11 +20,11 @@ if ! grep -qiE 'debian|ubuntu' /etc/os-release 2>/dev/null; then
     exit 1
 fi
 
-# ---- Fix DNS FIRST ----
+# ---- Fix DNS ----
 c_cyan "==> Setting reliable DNS resolvers..."
 echo "nameserver 8.8.8.8" > /etc/resolv.conf
 echo "nameserver 1.1.1.1" >> /etc/resolv.conf
-chattr +i /etc/resolv.conf 2>/dev/null || true  # prevent overwrite
+chattr +i /etc/resolv.conf 2>/dev/null || true
 
 c_cyan "==> Updating apt and installing bootstrap dependencies"
 apt-get update -y
@@ -35,7 +35,10 @@ c_cyan "==> Removing any stuck Git proxy settings..."
 git config --global --unset http.proxy 2>/dev/null || true
 git config --global --unset https.proxy 2>/dev/null || true
 
-# ---- Test connectivity ----
+# ---- ALWAYS clone fresh ----
+c_cyan "==> Removing existing ${APP_ROOT} (if any)..."
+rm -rf "${APP_ROOT}"
+
 c_cyan "==> Testing network connectivity..."
 if ! ping -c 1 8.8.8.8 >/dev/null 2>&1; then
     c_red "Cannot reach the internet (8.8.8.8 unreachable). Check your network."
@@ -44,13 +47,12 @@ fi
 
 if ! curl -s -o /dev/null --connect-timeout 5 https://github.com; then
     c_red "Cannot reach GitHub (https://github.com)."
-    c_red "Check firewall settings."
+    c_red "If you have the repo elsewhere, copy it to ${APP_ROOT} and run:"
+    c_red "  sudo python3 ${APP_ROOT}/main.py install --force"
     exit 1
 fi
 
-# ---- Clone with retries ----
-c_cyan "==> Fetching sshauto into ${APP_ROOT}"
-
+c_cyan "==> Cloning sshauto into ${APP_ROOT}"
 max_retries=3
 retry_delay=5
 attempt=0
@@ -59,28 +61,19 @@ clone_success=1
 while [[ $attempt -lt $max_retries ]]; do
     attempt=$((attempt + 1))
     c_cyan "Attempt $attempt/$max_retries..."
-
-    if [[ -d "${APP_ROOT}/.git" ]]; then
-        git -C "${APP_ROOT}" fetch origin "${BRANCH}" && git -C "${APP_ROOT}" reset --hard "origin/${BRANCH}"
-        clone_success=$?
-    else
-        rm -rf "${APP_ROOT}"
-        git clone --branch "${BRANCH}" --depth 1 "${REPO_URL}" "${APP_ROOT}"
-        clone_success=$?
-    fi
-
+    git clone --branch "${BRANCH}" --depth 1 "${REPO_URL}" "${APP_ROOT}"
+    clone_success=$?
     if [[ $clone_success -eq 0 ]]; then
         c_green "Clone successful."
         break
     fi
-
     if [[ $attempt -lt $max_retries ]]; then
         c_red "Clone failed. Retrying in ${retry_delay}s..."
         sleep "${retry_delay}"
     else
         c_red "Clone failed after ${max_retries} attempts."
         c_red "Please check your internet connection and DNS settings."
-        c_red "If GitHub is blocked, manually clone the repo and run:"
+        c_red "If you have the repo locally, copy it to ${APP_ROOT} and run:"
         c_red "  sudo python3 ${APP_ROOT}/main.py install --force"
         exit 1
     fi
