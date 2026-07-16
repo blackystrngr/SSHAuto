@@ -35,34 +35,10 @@ iptables -t nat -Z
 iptables -t mangle -Z
 iptables -t raw -Z
 
-iptables -P INPUT ACCEPT
-iptables -P FORWARD ACCEPT
-iptables -P OUTPUT ACCEPT
 
 c_green "iptables flushed and default policies set to ACCEPT."
 
 # ---- 2. FIX SYSTEMD-RESOLVED CONFIGURATION (DNS: 1.1.1.1, 1.0.0.1) ----
-c_cyan "==> Configuring systemd-resolved with DNS 1.1.1.1, 1.0.0.1..."
-# Backup original resolved.conf
-cp /etc/systemd/resolved.conf /etc/systemd/resolved.conf.bak 2>/dev/null || true
-
-# Write new config with Cloudflare DNS only
-cat > /etc/systemd/resolved.conf << 'EOF'
-[Resolve]
-DNS=1.1.1.1 1.0.0.1
-DNSStubListener=no
-Cache=yes
-EOF
-
-systemctl restart systemd-resolved
-
-# Remove the symlink and create a static resolv.conf
-rm -f /etc/resolv.conf
-echo "nameserver 1.1.1.1" > /etc/resolv.conf
-echo "nameserver 1.0.0.1" >> /etc/resolv.conf
-# prevent overwrite
-
-c_green "systemd-resolved configured with 1.1.1.1 and 1.0.0.1."
 
 # ---- 3. INSTALL DEPENDENCIES ----
 c_cyan "==> Updating apt and installing bootstrap dependencies"
