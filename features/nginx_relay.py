@@ -1,13 +1,13 @@
 """
 Builds /etc/nginx/sites-available/sshauto-relay.conf and symlinks it.
 Removes any other site configs to avoid conflicts.
-Uses Cloudflare Origin Certificate only – no fallback.
+Uses the Cloudflare certificate from state (must be generated first).
 """
 from pathlib import Path
 from core.config import (
     APP_ROOT, PROXY_PORT_DEFAULT, HTTP_PORTS, HTTPS_PORTS,
     NGINX_SITES_AVAILABLE, NGINX_SITES_ENABLED, state,
-    LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR
+    SSHAUTO_CERT_DIR
 )
 from core.exceptions import ConfigError
 from core.logger import log
@@ -21,7 +21,8 @@ NGINX_SITE_NAME = "sshauto-relay"
 class NginxRelayFeature(BaseFeature):
     name = "nginx_relay"
     description = "Generate the nginx WebSocket relay (HTTP+HTTPS)"
-    depends_on = ["packages", "dropbear_service", "python_proxy", "certificates"]  # depends on certificates now
+    # MUST run after certificates to have a valid cert
+    depends_on = ["packages", "dropbear_service", "python_proxy", "certificates"]
 
     @property
     def available_path(self) -> Path:
@@ -100,24 +101,24 @@ class NginxRelayFeature(BaseFeature):
 
         http_listen = "\n".join(f"    listen 0.0.0.0:{p};" for p in http_ports)
 
+        https_block = ""
         cert_path, key_path = self._resolve_cert_paths(data)
-        if not cert_path or not key_path:
-            raise ConfigError(
-                f"Cloudflare certificate not found for domain '{domain}'. "
-                "Run 'sshauto cert' to obtain one."
+        if cert_path and key_path:
+            https_tpl = (TEMPLATES_DIR / "nginx_relay_https.conf.tpl").read_text()
+            https_listen = "\n".join(f"    listen 0.0.0.0:{p} ssl;" for p in https_ports)
+            https_block = (
+                https_tpl
+                .replace("@HTTPS_LISTEN_BLOCK@", https_listen)
+                .replace("@CERT_PATH@", cert_path)
+                .replace("@KEY_PATH@", key_path)
+                .replace("@PROXY_PORT@", str(proxy_port))
+                .replace("@DOMAIN@", domain)
             )
-
-        https_tpl = (TEMPLATES_DIR / "nginx_relay_https.conf.tpl").read_text()
-        https_listen = "\n".join(f"    listen 0.0.0.0:{p} ssl;" for p in https_ports)
-        https_block = (
-            https_tpl
-            .replace("@HTTPS_LISTEN_BLOCK@", https_listen)
-            .replace("@CERT_PATH@", cert_path)
-            .replace("@KEY_PATH@", key_path)
-            .replace("@PROXY_PORT@", str(proxy_port))
-            .replace("@DOMAIN@", domain)
-        )
-        log.info(f"HTTPS block enabled with cert {cert_path}")
+            log.info(f"HTTPS block enabled with cert {cert_path}")
+        else:
+            # No cert – nginx cannot serve HTTPS
+            log.critical("No valid Cloudflare certificate found. Run 'sshauto cert' first.")
+            raise ConfigError("Certificate missing. Run 'sshauto cert' to generate one.")
 
         base_tpl = TEMPLATES_DIR / "nginx_relay.conf.tpl"
         if not base_tpl.exists():
@@ -132,21 +133,26 @@ class NginxRelayFeature(BaseFeature):
         )
 
     def _resolve_cert_paths(self, data: dict) -> tuple[str | None, str | None]:
-        """Only use Cloudflare certificate – no fallback."""
+        """
+        Only look for Cloudflare certificate from state or SSHAUTO_CERT_DIR.
+        No Let's Encrypt fallback.
+        """
+        # 1. State paths
+        cert = data.get("cert_fullchain_path")
+        key = data.get("cert_key_path")
+        if cert and key and Path(cert).exists() and Path(key).exists():
+            return cert, key
+
         domain = data.get("cert_domain")
-        if not domain:
-            return None, None
-
-        # Check Cloudflare/self-signed directory
-        cf_cert = SSHAUTO_CERT_DIR / domain / "fullchain.pem"
-        cf_key = SSHAUTO_CERT_DIR / domain / "privkey.pem"
-        if cf_cert.exists() and cf_key.exists():
-            return str(cf_cert), str(cf_key)
-
-        # Check Let's Encrypt directory (where we also copy Cloudflare cert)
-        le_cert = LETSENCRYPT_LIVE / domain / "fullchain.pem"
-        le_key = LETSENCRYPT_LIVE / domain / "privkey.pem"
-        if le_cert.exists() and le_key.exists():
-            return str(le_cert), str(le_key)
+        if domain:
+            # 2. Cloudflare self‑signed (from certificates feature)
+            cf_cert = SSHAUTO_CERT_DIR / domain / "fullchain.pem"
+            cf_key = SSHAUTO_CERT_DIR / domain / "privkey.pem"
+            if cf_cert.exists() and cf_key.exists():
+                log.info(f"Using Cloudflare certificate from {SSHAUTO_CERT_DIR / domain}")
+                data["cert_fullchain_path"] = str(cf_cert)
+                data["cert_key_path"] = str(cf_key)
+                state.save(data)
+                return str(cf_cert), str(cf_key)
 
         return None, None
