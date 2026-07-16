@@ -1,11 +1,10 @@
 """
-Automated non‑interactive Cloudflare Origin Certificate generation layer.
-If Cloudflare credentials are not provided, falls back to self‑signed.
+Automated Cloudflare Origin Certificate generation with self‑signed fallback.
+Always prompts for domain, email, and API key (if Cloudflare is chosen).
 """
 from __future__ import annotations
 
 import datetime
-import json
 from pathlib import Path
 import requests
 
@@ -23,30 +22,30 @@ class CloudflareStrategy:
         self.domain = domain
 
     def issue(self) -> tuple[str, str]:
-        """Fetch a 15‑year origin certificate from Cloudflare."""
         log.info(f"Requesting Cloudflare Origin Certificate for {self.domain}")
 
-        # 1. Get zone ID
-        zones_url = "https://api.cloudflare.com/client/v4/zones"
         headers = {
             "X-Auth-Email": self.email,
             "X-Auth-Key": self.api_key,
             "Content-Type": "application/json",
         }
+
+        # 1. Get zone ID
+        zones_url = "https://api.cloudflare.com/client/v4/zones"
         params = {"name": self.domain}
         resp = requests.get(zones_url, headers=headers, params=params, timeout=30)
         if resp.status_code != 200:
             raise CertificateError(f"Cloudflare API error: {resp.text}")
         data = resp.json()
         if not data.get("success") or not data.get("result"):
-            raise CertificateError("Domain not found in Cloudflare account.")
+            raise CertificateError(f"Domain '{self.domain}' not found in Cloudflare account.")
         zone_id = data["result"][0]["id"]
 
         # 2. Request origin certificate (15 years)
         cert_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/origin_certificates"
         payload = {
             "hostnames": [self.domain],
-            "requested_validity": 5475,  # 15 years
+            "requested_validity": 5475,
             "request_type": "origin-rsa",
         }
         resp = requests.post(cert_url, headers=headers, json=payload, timeout=30)
@@ -65,7 +64,7 @@ class CloudflareStrategy:
         key_path.write_text(cert_data["result"]["private_key"])
         log.success("Cloudflare Origin Certificate saved.")
 
-        # Also store in Let's Encrypt style path for compatibility
+        # Store in Let's Encrypt style path for compatibility
         le_dir = LETSENCRYPT_LIVE / self.domain
         le_dir.mkdir(parents=True, exist_ok=True)
         (le_dir / "fullchain.pem").write_text(cert_data["result"]["certificate"])
@@ -102,40 +101,43 @@ class CertificatesFeature(BaseFeature):
 
     def install(self) -> None:
         data = state.ensure_defaults()
-        domain = data.get("cert_domain")
 
-        # If no domain, prompt
+        # Always ask for the domain (even if already set)
+        print()
+        log.rule("Certificate Configuration")
+        domain = input("Enter your domain name (e.g., hi.blackstrngr.qzz.io): ").strip()
         if not domain:
-            print()
-            log.rule("Certificate Configuration")
-            domain = input("Enter your domain name (e.g., hi.blackstrngr.qzz.io): ").strip()
-            if not domain:
-                raise CertificateError("Domain cannot be empty.")
-            state.set("cert_domain", domain)
-            data["cert_domain"] = domain
+            raise CertificateError("Domain cannot be empty.")
+        state.set("cert_domain", domain)
+        data["cert_domain"] = domain
 
-        # Ask user for Cloudflare certificate (or skip)
+        # Ask for Cloudflare or self‑signed
         print()
         log.important("Cloudflare Origin Certificate (15‑year validity) is recommended.")
         use_cf = input("Do you want to use Cloudflare? [Y/n]: ").strip().lower()
+        cert_path = key_path = None
+
         if use_cf in ("y", "yes", ""):
             email = input("Cloudflare Account Email: ").strip()
             if not email:
-                raise CertificateError("Email is required.")
-            api_key = input("Cloudflare Global API Key: ").strip()
-            if not api_key:
-                raise CertificateError("API Key is required.")
+                log.warning("Email is required. Falling back to self‑signed.")
+                use_cf = "n"
+            else:
+                api_key = input("Cloudflare Global API Key: ").strip()
+                if not api_key:
+                    log.warning("API Key is required. Falling back to self‑signed.")
+                    use_cf = "n"
+                else:
+                    strategy = CloudflareStrategy(email, api_key, domain)
+                    try:
+                        cert_path, key_path = strategy.issue()
+                    except Exception as e:
+                        log.error(f"Cloudflare certificate failed: {e}")
+                        log.warning("Falling back to self‑signed.")
+                        use_cf = "n"
 
-            strategy = CloudflareStrategy(email, api_key, domain)
-            try:
-                cert_path, key_path = strategy.issue()
-            except Exception as e:
-                log.error(f"Cloudflare certificate failed: {e}")
-                log.warning("Falling back to self‑signed.")
-                strategy = SelfSignedStrategy()
-                cert_path, key_path = strategy.issue(domain)
-        else:
-            log.info("Skipping Cloudflare; using self‑signed certificate.")
+        if use_cf not in ("y", "yes", "") or cert_path is None:
+            log.info("Using self‑signed certificate.")
             strategy = SelfSignedStrategy()
             cert_path, key_path = strategy.issue(domain)
 
