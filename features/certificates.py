@@ -1,11 +1,14 @@
 """
-Automated non-interactive ACME Account allocation and generation layer.
-Skips re-issuance if a valid certificate already exists (matching domain).
+Automated non‑interactive Cloudflare Origin Certificate generation layer.
+If Cloudflare credentials are not provided, falls back to self‑signed.
 """
 from __future__ import annotations
 
 import datetime
+import json
 from pathlib import Path
+import requests
+
 from core.config import LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR, state
 from core.exceptions import CertificateError
 from core.logger import log
@@ -13,18 +16,71 @@ from core.shell import Shell
 from features.base import BaseFeature
 
 
-class CertStrategy:
-    def issue(self, domain: str) -> tuple[str, str]:
-        raise NotImplementedError
+class CloudflareStrategy:
+    def __init__(self, email: str, api_key: str, domain: str):
+        self.email = email
+        self.api_key = api_key
+        self.domain = domain
+
+    def issue(self) -> tuple[str, str]:
+        """Fetch a 15‑year origin certificate from Cloudflare."""
+        log.info(f"Requesting Cloudflare Origin Certificate for {self.domain}")
+
+        # 1. Get zone ID
+        zones_url = "https://api.cloudflare.com/client/v4/zones"
+        headers = {
+            "X-Auth-Email": self.email,
+            "X-Auth-Key": self.api_key,
+            "Content-Type": "application/json",
+        }
+        params = {"name": self.domain}
+        resp = requests.get(zones_url, headers=headers, params=params, timeout=30)
+        if resp.status_code != 200:
+            raise CertificateError(f"Cloudflare API error: {resp.text}")
+        data = resp.json()
+        if not data.get("success") or not data.get("result"):
+            raise CertificateError("Domain not found in Cloudflare account.")
+        zone_id = data["result"][0]["id"]
+
+        # 2. Request origin certificate (15 years)
+        cert_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/origin_certificates"
+        payload = {
+            "hostnames": [self.domain],
+            "requested_validity": 5475,  # 15 years
+            "request_type": "origin-rsa",
+        }
+        resp = requests.post(cert_url, headers=headers, json=payload, timeout=30)
+        if resp.status_code != 200:
+            raise CertificateError(f"Origin cert request failed: {resp.text}")
+        cert_data = resp.json()
+        if not cert_data.get("success"):
+            raise CertificateError(f"Origin cert error: {cert_data.get('errors')}")
+
+        # 3. Save certificate and key
+        out_dir = SSHAUTO_CERT_DIR / self.domain
+        out_dir.mkdir(parents=True, exist_ok=True)
+        cert_path = out_dir / "fullchain.pem"
+        key_path = out_dir / "privkey.pem"
+        cert_path.write_text(cert_data["result"]["certificate"])
+        key_path.write_text(cert_data["result"]["private_key"])
+        log.success("Cloudflare Origin Certificate saved.")
+
+        # Also store in Let's Encrypt style path for compatibility
+        le_dir = LETSENCRYPT_LIVE / self.domain
+        le_dir.mkdir(parents=True, exist_ok=True)
+        (le_dir / "fullchain.pem").write_text(cert_data["result"]["certificate"])
+        (le_dir / "privkey.pem").write_text(cert_data["result"]["private_key"])
+
+        return str(cert_path), str(key_path)
 
 
-class SelfSignedStrategy(CertStrategy):
+class SelfSignedStrategy:
     def issue(self, domain: str) -> tuple[str, str]:
         out_dir = SSHAUTO_CERT_DIR / domain
         out_dir.mkdir(parents=True, exist_ok=True)
         cert_path = out_dir / "fullchain.pem"
         key_path = out_dir / "privkey.pem"
-        log.info(f"Generating immediate self-signed fallback cert for {domain}")
+        log.info(f"Generating self‑signed fallback cert for {domain}")
         Shell.run(
             "openssl req -x509 -nodes -days 825 -newkey rsa:2048 "
             f"-keyout {key_path} -out {cert_path} -subj '/CN={domain}'"
@@ -32,91 +88,54 @@ class SelfSignedStrategy(CertStrategy):
         return str(cert_path), str(key_path)
 
 
-class AcmeStrategy(CertStrategy):
-    def issue(self, domain: str) -> tuple[str, str]:
-        Shell.require("certbot", package_hint="certbot")
-        log.info(f"Deploying Certbot pipeline for domain: {domain}")
-        
-        Shell.run("systemctl stop nginx", check=False)
-        try:
-            Shell.run(
-                f"certbot certonly --standalone --non-interactive --agree-tos "
-                f"--register-unsafely-without-email -d {domain}",
-                timeout=180
-            )
-        except Exception as exc:
-            raise CertificateError(f"ACME validation transaction dropped: {exc}")
-        finally:
-            Shell.run("systemctl start nginx", check=False)
-
-        live_dir = LETSENCRYPT_LIVE / domain
-        return str(live_dir / "fullchain.pem"), str(live_dir / "privkey.pem")
-
-
 class CertificatesFeature(BaseFeature):
     name = "certificates"
-    description = "Manage automation keys and ACME cryptographic assets"
+    description = "Manage Cloudflare Origin or self‑signed certificates"
     depends_on = ["packages"]
     idempotent = False
 
     def is_installed(self) -> bool:
-        """Check if a valid certificate exists in state or on disk."""
         data = state.load()
-        # Try state paths first
         cert = data.get("cert_fullchain_path")
         key = data.get("cert_key_path")
-        if cert and key and Path(cert).exists() and Path(key).exists():
-            return True
-        
-        # Fallback: auto-discover from standard locations
-        domain = data.get("cert_domain")
-        if domain:
-            # Check Let's Encrypt
-            le_cert = LETSENCRYPT_LIVE / domain / "fullchain.pem"
-            le_key = LETSENCRYPT_LIVE / domain / "privkey.pem"
-            if le_cert.exists() and le_key.exists():
-                return True
-            # Check self-signed
-            ss_cert = SSHAUTO_CERT_DIR / domain / "fullchain.pem"
-            ss_key = SSHAUTO_CERT_DIR / domain / "privkey.pem"
-            if ss_cert.exists() and ss_key.exists():
-                return True
-            # Check script-style selfsigned
-            script_cert = Path("/etc/ssl/certs/selfsigned.crt")
-            script_key = Path("/etc/ssl/private/selfsigned.key")
-            if script_cert.exists() and script_key.exists():
-                return True
-        return False
+        return bool(cert and key and Path(cert).exists() and Path(key).exists())
 
     def install(self) -> None:
         data = state.ensure_defaults()
-        
-        # If a valid cert already exists, skip re-issuance
-        if self.is_installed():
-            log.info("Valid certificate already exists – skipping re-issuance.")
-            # Ensure state is updated with discovered paths
-            self._update_state_from_disk(data)
-            # Regenerate nginx to apply
-            from features.nginx_relay import NginxRelayFeature
-            NginxRelayFeature().regenerate()
-            return
-
         domain = data.get("cert_domain")
+
+        # If no domain, prompt
         if not domain:
             print()
-            log.rule("Unattended ACME Configuration")
-            domain = input("Target Domain name for this server: ").strip()
+            log.rule("Certificate Configuration")
+            domain = input("Enter your domain name (e.g., hi.blackstrngr.qzz.io): ").strip()
             if not domain:
-                raise CertificateError("Domain mapping field cannot be empty.")
+                raise CertificateError("Domain cannot be empty.")
             state.set("cert_domain", domain)
             data["cert_domain"] = domain
 
-        # Try ACME first
-        strategy = AcmeStrategy()
-        try:
-            cert_path, key_path = strategy.issue(domain)
-        except Exception:
-            log.warning("ACME failed. Swapping instantly to self-signed strategy configuration.")
+        # Ask user for Cloudflare certificate (or skip)
+        print()
+        log.important("Cloudflare Origin Certificate (15‑year validity) is recommended.")
+        use_cf = input("Do you want to use Cloudflare? [Y/n]: ").strip().lower()
+        if use_cf in ("y", "yes", ""):
+            email = input("Cloudflare Account Email: ").strip()
+            if not email:
+                raise CertificateError("Email is required.")
+            api_key = input("Cloudflare Global API Key: ").strip()
+            if not api_key:
+                raise CertificateError("API Key is required.")
+
+            strategy = CloudflareStrategy(email, api_key, domain)
+            try:
+                cert_path, key_path = strategy.issue()
+            except Exception as e:
+                log.error(f"Cloudflare certificate failed: {e}")
+                log.warning("Falling back to self‑signed.")
+                strategy = SelfSignedStrategy()
+                cert_path, key_path = strategy.issue(domain)
+        else:
+            log.info("Skipping Cloudflare; using self‑signed certificate.")
             strategy = SelfSignedStrategy()
             cert_path, key_path = strategy.issue(domain)
 
@@ -124,46 +143,17 @@ class CertificatesFeature(BaseFeature):
             "cert_domain": domain,
             "cert_fullchain_path": cert_path,
             "cert_key_path": key_path,
-            "cert_issued_at": datetime.datetime.utcnow().isoformat(),
+            "cert_issued_at": datetime.datetime.now(datetime.UTC).isoformat(),
+            "cert_strategy": "cloudflare" if use_cf in ("y", "yes", "") else "selfsigned",
         })
         state.save(data)
 
-        # Triggers structural rewrite inside the newly updated Nginx component block
+        # Trigger nginx regeneration
         from features.nginx_relay import NginxRelayFeature
         NginxRelayFeature().regenerate()
 
+        log.success("Certificate ready and applied to nginx.")
+
     def remove(self) -> None:
+        log.warning("Certificate removal is manual – delete files from /etc/letsencrypt/live and /var/lib/sshauto/certs if needed.")
         pass
-
-    def _update_state_from_disk(self, data: dict) -> None:
-        """Auto-discover existing cert and update state with paths."""
-        domain = data.get("cert_domain")
-        if not domain:
-            return
-
-        # Let's Encrypt
-        le_cert = LETSENCRYPT_LIVE / domain / "fullchain.pem"
-        le_key = LETSENCRYPT_LIVE / domain / "privkey.pem"
-        if le_cert.exists() and le_key.exists():
-            data["cert_fullchain_path"] = str(le_cert)
-            data["cert_key_path"] = str(le_key)
-            state.save(data)
-            return
-
-        # Self-signed
-        ss_cert = SSHAUTO_CERT_DIR / domain / "fullchain.pem"
-        ss_key = SSHAUTO_CERT_DIR / domain / "privkey.pem"
-        if ss_cert.exists() and ss_key.exists():
-            data["cert_fullchain_path"] = str(ss_cert)
-            data["cert_key_path"] = str(ss_key)
-            state.save(data)
-            return
-
-        # Script selfsigned
-        script_cert = Path("/etc/ssl/certs/selfsigned.crt")
-        script_key = Path("/etc/ssl/private/selfsigned.key")
-        if script_cert.exists() and script_key.exists():
-            data["cert_fullchain_path"] = str(script_cert)
-            data["cert_key_path"] = str(script_key)
-            state.save(data)
-            return
