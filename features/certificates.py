@@ -9,16 +9,6 @@ from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
 
-# Known IPs for api.cloudflare.com (from your nslookup)
-CLOUDFLARE_IPS = [
-    "104.19.192.29",
-    "104.19.192.174",
-    "104.19.192.175",
-    "104.19.192.176",
-    "104.19.192.177",
-    "104.19.193.29",
-]
-
 
 class CloudflareStrategy:
     def __init__(self, email: str | None, api_key: str, domain: str):
@@ -44,13 +34,11 @@ class CloudflareStrategy:
         headers = {"Content-Type": "application/json"}
         if self.api_key.startswith("cfk_"):
             headers["Authorization"] = f"Bearer {self.api_key}"
-            log.info("Using API Token (Bearer) authentication.")
         else:
             if not self.email:
                 raise CertificateError("Global API Key requires email.")
             headers["X-Auth-Email"] = self.email
             headers["X-Auth-Key"] = self.api_key
-            log.info("Using Global API Key authentication.")
 
         payload = {
             "hostnames": [self.domain],
@@ -59,33 +47,35 @@ class CloudflareStrategy:
             "csr": csr_text.strip(),
         }
 
-        # Try each IP until one works
+        # Use domain name – system DNS will resolve it
+        url = "https://api.cloudflare.com/client/v4/certificates"
+
+        max_retries = 3
         last_error = None
-        for ip in CLOUDFLARE_IPS:
-            url = f"https://{ip}/client/v4/certificates"
-            headers["Host"] = "api.cloudflare.com"
-            log.info(f"Trying IP: {ip}")
+        for attempt in range(max_retries):
             try:
                 resp = requests.post(
                     url,
                     headers=headers,
                     json=payload,
                     timeout=30,
-                    verify=False   # skip hostname verification (we're using IP)
+                    verify=True
                 )
                 if resp.status_code == 200:
                     break
                 else:
-                    log.warning(f"IP {ip} returned {resp.status_code}, trying next...")
+                    log.warning(f"Request returned {resp.status_code} (attempt {attempt+1})")
+                    if attempt < max_retries - 1:
+                        time.sleep(5)
                     continue
             except Exception as e:
-                log.warning(f"IP {ip} failed: {e}")
+                log.warning(f"Request failed (attempt {attempt+1}): {e}")
                 last_error = e
-                continue
-        else:
-            # All IPs failed
-            log.error("All Cloudflare IPs failed.")
-            raise CertificateError(f"Cloudflare unreachable: {last_error}")
+                if attempt < max_retries - 1:
+                    time.sleep(5)
+                    continue
+                else:
+                    raise CertificateError(f"Cloudflare unreachable: {last_error}")
 
         if resp.status_code != 200:
             raise CertificateError(f"Cloudflare API error: {resp.text}")
