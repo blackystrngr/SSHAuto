@@ -43,20 +43,25 @@ class UserManager:
 
         shell = self._tunnel_shell()
 
-        # Create user with supplementary group (sshauser-users)
+        # Create user with supplementary group
         Shell.run(f"useradd -m -s {shell} -G {USER_GROUP} {username}")
 
-        # Set password via chpasswd (ensure input is correct)
+        # Set password via chpasswd
         result = Shell.run(f"chpasswd", input_text=f"{username}:{password}\n", check=False)
         if not result.ok:
             raise ValidationError(f"Failed to set password: {result.stderr}")
 
+        # Unlock the account (in case it was locked by default)
+        Shell.run(f"passwd -u {username}", check=False)
+
         if expire_days:
             Shell.run(f"chage -M {expire_days} {username}", check=False)
 
-        # Verify the user is created and password is set
-        # (we can't read the password, but we can check if the user exists)
-        log.debug(f"User '{username}' created with shell {shell}")
+        # Verify the user exists and is not locked
+        locked = self._is_locked(username)
+        if locked:
+            log.warning(f"User {username} is still locked after creation. Unlocking manually...")
+            Shell.run(f"passwd -u {username}", check=False)
 
         log.success(f"created tunnel user '{username}'"
                      + (f" (expires in {expire_days}d)" if expire_days else ""))
