@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sshauto bootstrap installer – minimal DNS intervention.
+# sshauto bootstrap installer – respects system DNS.
 set -euo pipefail
 
 REPO_URL="https://github.com/blackystrngr/SSHAuto"
@@ -20,7 +20,7 @@ if ! grep -qiE 'debian|ubuntu' /etc/os-release 2>/dev/null; then
     exit 1
 fi
 
-# ---- 1. UPDATE APT & INSTALL DEPENDENCIES (including dnsutils) ----
+# ---- 1. UPDATE APT & INSTALL DEPENDENCIES ----
 c_cyan "==> Updating apt and installing bootstrap dependencies"
 apt-get update -y
 DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip git curl wget ca-certificates dnsutils
@@ -30,43 +30,16 @@ c_cyan "==> Removing any stuck Git proxy settings..."
 git config --global --unset http.proxy 2>/dev/null || true
 git config --global --unset https.proxy 2>/dev/null || true
 
-# ---- 3. TEST DNS - if it works, skip hardening ----
+# ---- 3. TEST DNS (no changes) ----
 c_cyan "==> Testing DNS resolution..."
-if nslookup github.com >/dev/null 2>&1; then
-    c_green "DNS already working – skipping DNS hardening."
-else
-    c_cyan "DNS not working. Applying reliable resolvers (8.8.8.8, 1.1.1.1)..."
-    # Override /etc/resolv.conf
-    echo "nameserver 8.8.8.8" > /etc/resolv.conf
-    echo "nameserver 1.1.1.1" >> /etc/resolv.conf
-    chattr +i /etc/resolv.conf 2>/dev/null || true  # lock it
-
-    # Flush cache
-    if command -v systemd-resolve &>/dev/null; then
-        systemd-resolve --flush-caches 2>/dev/null || true
-    fi
-
-    # Retry DNS test
-    max_retries=3
-    attempt=0
-    dns_ok=0
-    while [[ $attempt -lt $max_retries ]]; do
-        attempt=$((attempt + 1))
-        if nslookup github.com >/dev/null 2>&1; then
-            dns_ok=1
-            break
-        fi
-        c_red "DNS test attempt $attempt/$max_retries failed. Retrying in 3s..."
-        sleep 3
-        systemd-resolve --flush-caches 2>/dev/null || true
-    done
-    if [[ $dns_ok -eq 0 ]]; then
-        c_red "DNS still failing after hardening. Please check network manually."
-        c_red "You can try: echo 'nameserver 8.8.8.8' > /etc/resolv.conf && chattr +i /etc/resolv.conf"
-        exit 1
-    fi
-    c_green "DNS restored."
+if ! nslookup github.com >/dev/null 2>&1; then
+    c_red "DNS resolution for github.com failed."
+    c_red "Please ensure your DNS is working. You can test with: nslookup github.com"
+    c_red "If DNS is blocked, you can manually clone the repo and run:"
+    c_red "  sudo python3 ${APP_ROOT}/main.py install --force"
+    exit 1
 fi
+c_green "DNS is working."
 
 # ---- 4. CLONE FRESH WITH RETRIES ----
 c_cyan "==> Cloning sshauto into ${APP_ROOT}"
