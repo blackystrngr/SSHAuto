@@ -30,6 +30,28 @@ BANNER = r"""
    websocket relay autoscript — type 'kk' any time for the dashboard
 """
 
+# Core features (always installed)
+CORE_FEATURES = [
+    "packages",
+    "firewall",
+    "dropbear_service",
+    "python_proxy",
+    "nginx_relay",
+    "ssh_service",
+    "fail2ban_service",
+    "certificates",
+    "squid_proxy",
+    "udpgw_service",
+    "network_optimizer",
+]
+
+# Optional features (only installed via dashboard or --only)
+OPTIONAL_FEATURES = [
+    "hysteria2",
+    "dns_tunnel",
+    "icmp_tunnel",
+]
+
 NON_IDEMPOTENT = {"certificates"}
 
 
@@ -74,17 +96,22 @@ def cmd_install(args):
     _clean_old_proxy()
 
     manager = PluginManager()
-    only = args.only.split(",") if args.only else None
+    # Determine which features to install
+    if args.only:
+        wanted = args.only.split(",")
+    else:
+        # Install core features only
+        wanted = CORE_FEATURES
 
     if args.skip_non_idempotent:
-        only = [n for n in (only or manager.names()) if n not in NON_IDEMPOTENT]
+        wanted = [n for n in wanted if n not in NON_IDEMPOTENT]
 
     data = state.ensure_defaults()
     if not data.get("created_at"):
         data["created_at"] = datetime.datetime.utcnow().isoformat()
         state.save(data)
 
-    results = manager.install_all(only=only, force=args.force)
+    results = manager.install_all(only=wanted, force=args.force)
 
     if not args.quiet and not args.skip_non_idempotent:
         _install_kk_command()
@@ -94,6 +121,10 @@ def cmd_install(args):
         if failures:
             log.warning(f"Some features failed: {', '.join(failures)}. "
                         f"Run 'python3 main.py status' for details.")
+        if args.only:
+            log.info(f"Installed only: {', '.join(wanted)}")
+        else:
+            log.info("Core features installed. Optional tunnels (Hysteria2, DNSTT, ICMP) can be added via dashboard (options 12-14).")
 
     log.info("Reloading systemd to pick up new unit files...")
     Shell.run("systemctl daemon-reload", check=False, timeout=10)
