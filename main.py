@@ -144,7 +144,7 @@ def cmd_status(args):
 def cmd_cert(args):
     require_root()
     from features.certificates import CertificatesFeature
-    CertificatesFeature().install()
+    CertificatesFeature().interactive()
 
 
 def cmd_uninstall(args):
