@@ -1,11 +1,13 @@
 """
 Builds /etc/nginx/sites-available/sshauto-relay.conf and symlinks it.
-Removes any other site configs (like ssh_tunnel) to avoid conflicts.
+Removes any other site configs to avoid conflicts.
+Uses the certificate from the state (Cloudflare / self‑signed).
 """
 from pathlib import Path
 from core.config import (
     APP_ROOT, PROXY_PORT_DEFAULT, HTTP_PORTS, HTTPS_PORTS,
-    NGINX_SITES_AVAILABLE, NGINX_SITES_ENABLED, state
+    NGINX_SITES_AVAILABLE, NGINX_SITES_ENABLED, state,
+    LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR
 )
 from core.exceptions import ConfigError
 from core.logger import log
@@ -36,7 +38,7 @@ class NginxRelayFeature(BaseFeature):
         NGINX_SITES_AVAILABLE.mkdir(parents=True, exist_ok=True)
         NGINX_SITES_ENABLED.mkdir(parents=True, exist_ok=True)
 
-        # --- Remove any conflicting site configs ---
+        # Remove any conflicting site configs
         self._remove_conflicting_sites()
 
         self._disable_default_site()
@@ -70,14 +72,11 @@ class NginxRelayFeature(BaseFeature):
             log.debug("disabled default site")
 
     def _remove_conflicting_sites(self):
-        """Remove any site configs that are not ours."""
-        # List of site names that we should keep (only our own)
         keep = [f"{NGINX_SITE_NAME}.conf", "default"]
         for site in NGINX_SITES_ENABLED.glob("*.conf"):
             if site.name not in keep:
                 log.info(f"Removing conflicting nginx site: {site.name}")
                 site.unlink()
-        # Also remove any leftover symlinks to old configs (like ssh_tunnel)
         for site in NGINX_SITES_ENABLED.glob("*"):
             if site.is_symlink() and site.name not in keep:
                 try:
@@ -132,29 +131,53 @@ class NginxRelayFeature(BaseFeature):
             .replace("@HTTPS_SERVER_BLOCK@", https_block)
         )
 
-    def _resolve_cert_paths(self, data):
+    def _resolve_cert_paths(self, data: dict) -> tuple[str | None, str | None]:
+        """
+        Resolve certificate and key paths.
+        Priority:
+          1. Direct paths from state (cert_fullchain_path / cert_key_path)
+          2. Check Cloudflare directory: /var/lib/sshauto/certs/<domain>/
+          3. Check Let's Encrypt: /etc/letsencrypt/live/<domain>/
+          4. Fallback self‑signed from the certificates feature.
+        """
+        # 1. State paths
         cert = data.get("cert_fullchain_path")
         key = data.get("cert_key_path")
         if cert and key and Path(cert).exists() and Path(key).exists():
             return cert, key
 
+        domain = data.get("cert_domain")
+        if not domain:
+            return None, None
+
+        # 2. Cloudflare / self‑signed from SSHAUTO_CERT_DIR
+        cf_cert = SSHAUTO_CERT_DIR / domain / "fullchain.pem"
+        cf_key = SSHAUTO_CERT_DIR / domain / "privkey.pem"
+        if cf_cert.exists() and cf_key.exists():
+            log.info(f"Using Cloudflare/self‑signed certificate from {SSHAUTO_CERT_DIR / domain}")
+            data["cert_fullchain_path"] = str(cf_cert)
+            data["cert_key_path"] = str(cf_key)
+            state.save(data)
+            return str(cf_cert), str(cf_key)
+
+        # 3. Let's Encrypt
+        le_cert = LETSENCRYPT_LIVE / domain / "fullchain.pem"
+        le_key = LETSENCRYPT_LIVE / domain / "privkey.pem"
+        if le_cert.exists() and le_key.exists():
+            log.info(f"Using Let's Encrypt certificate for {domain}")
+            data["cert_fullchain_path"] = str(le_cert)
+            data["cert_key_path"] = str(le_key)
+            state.save(data)
+            return str(le_cert), str(le_key)
+
+        # 4. Fallback self‑signed (from certificates feature)
         script_cert = Path("/etc/ssl/certs/selfsigned.crt")
         script_key = Path("/etc/ssl/private/selfsigned.key")
         if script_cert.exists() and script_key.exists():
+            log.info("Using fallback self‑signed certificate from /etc/ssl/")
             data["cert_fullchain_path"] = str(script_cert)
             data["cert_key_path"] = str(script_key)
             state.save(data)
             return str(script_cert), str(script_key)
 
-        from core.config import LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR
-        for base in [LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR, Path("/etc/ssl/cloudflare")]:
-            if not base.exists():
-                continue
-            for f in base.glob("*/fullchain.pem"):
-                k = f.parent / "privkey.pem"
-                if k.exists():
-                    data["cert_fullchain_path"] = str(f)
-                    data["cert_key_path"] = str(k)
-                    state.save(data)
-                    return str(f), str(k)
         return None, None
