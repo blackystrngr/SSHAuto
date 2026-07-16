@@ -38,6 +38,7 @@ iptables -t raw -Z
 iptables -P INPUT ACCEPT
 iptables -P FORWARD ACCEPT
 iptables -P OUTPUT ACCEPT
+sysctl -w net.ipv6.conf.all.disable_ipv6=1 && sysctl -w net.ipv6.conf.default.disable_ipv6=1
 
 c_green "iptables flushed and default policies set to ACCEPT."
 
