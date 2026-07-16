@@ -31,7 +31,6 @@ class CloudflareStrategy:
         log.info(f"Requesting Cloudflare Origin Certificate for {self.domain}")
         key_text, csr_text, key_path = self._generate_csr()
 
-        # Always use Global API Key method (X-Auth-Email + X-Auth-Key)
         headers = {
             "Content-Type": "application/json",
             "X-Auth-Email": self.email,
@@ -108,11 +107,16 @@ class CertificatesFeature(BaseFeature):
         return bool(cert and key and Path(cert).exists() and Path(key).exists())
 
     def install(self) -> None:
+        """Called during `main.py install` – skip if cert already exists."""
+        if self.is_installed():
+            log.info("Valid certificate already exists. Skipping certificate generation.")
+            return
         print()
         log.rule("Certificate Configuration")
         self._interactive()
 
     def interactive(self) -> None:
+        """Called during `sshauto cert` – always prompts for renewal."""
         print()
         log.rule("Certificate Configuration")
         self._interactive()
