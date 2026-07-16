@@ -1,5 +1,5 @@
 """
-DNS Tunneling – compiles dnstt from source, uses generated keys.
+DNS Tunneling – dnstt (optional). Uses UDP port 53.
 """
 from __future__ import annotations
 
@@ -18,20 +18,24 @@ DNSTT_SERVICE = Path("/etc/systemd/system/dnstt-server.service")
 
 class DnsTunnelFeature(BaseFeature):
     name = "dns_tunnel"
-    description = "DNS tunneling (dnstt) – compiled from source"
+    description = "DNS tunneling (dnstt) – optional, UDP 53"
     depends_on = ["packages"]
 
     def is_installed(self) -> bool:
         return DNSTT_BIN.exists() and DNSTT_SERVICE.exists()
 
     def install(self) -> None:
-        log.info("Installing dnstt DNS tunnel from source...")
+        log.info("Installing dnstt DNS tunnel...")
 
         data = state.ensure_defaults()
         domain = data.get("dns_tunnel_domain", "ns1.hi.blackstrngr.qzz.io")
-        dns_port = data.get("dns_tunnel_port", 5300)
+        dns_port = data.get("dns_tunnel_port", 53)
         server_ip = data.get("server_ip", "your_server_ip")
         target = "127.0.0.1:22"  # default target
+
+        # Stop systemd-resolved if it's using port 53
+        Shell.run("systemctl stop systemd-resolved 2>/dev/null", check=False)
+        Shell.run("systemctl disable systemd-resolved 2>/dev/null", check=False)
 
         # 1. Install Go if not present
         Shell.run("apt-get install -y golang-go git", check=True)
@@ -45,7 +49,7 @@ class DnsTunnelFeature(BaseFeature):
         Shell.run("chmod +x /usr/local/bin/dnstt-server", check=True)
         Shell.run("rm -rf /tmp/dnstt", check=False)
 
-        # 3. Generate DNSTT keys (correct flags: -pubkey-file and -privkey-file)
+        # 3. Generate DNSTT keys
         DNSTT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         log.info("Generating DNSTT keys...")
         Shell.run(
@@ -97,7 +101,10 @@ WantedBy=multi-user.target
         DNSTT_SERVICE.unlink(missing_ok=True)
         DNSTT_CONFIG_DIR.unlink(missing_ok=True)
         DNSTT_BIN.unlink(missing_ok=True)
-        port = state.get("dns_tunnel_port", 5300)
+        port = state.get("dns_tunnel_port", 53)
         Shell.run(f"ufw delete allow {port}/udp", check=False)
         Shell.run("systemctl daemon-reload", check=False)
+        # Re‑enable systemd-resolved (optional)
+        Shell.run("systemctl enable systemd-resolved 2>/dev/null", check=False)
+        Shell.run("systemctl start systemd-resolved 2>/dev/null", check=False)
         log.info("DNSTT removed.")
