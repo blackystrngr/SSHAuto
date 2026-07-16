@@ -1,5 +1,5 @@
 """
-DNS Tunneling – dnstt (optional). Uses UDP port 53 safely.
+DNS Tunneling – compiles dnstt from source, uses generated keys.
 """
 from __future__ import annotations
 
@@ -18,33 +18,20 @@ DNSTT_SERVICE = Path("/etc/systemd/system/dnstt-server.service")
 
 class DnsTunnelFeature(BaseFeature):
     name = "dns_tunnel"
-    description = "DNS tunneling (dnstt) – optional, UDP 53"
+    description = "DNS tunneling (dnstt) – compiled from source"
     depends_on = ["packages"]
 
     def is_installed(self) -> bool:
         return DNSTT_BIN.exists() and DNSTT_SERVICE.exists()
 
     def install(self) -> None:
-        log.info("Installing dnstt DNS tunnel...")
+        log.info("Installing dnstt DNS tunnel from source...")
 
         data = state.ensure_defaults()
         domain = data.get("dns_tunnel_domain", "ns1.hi.blackstrngr.qzz.io")
-        dns_port = data.get("dns_tunnel_port", 53)
+        dns_port = data.get("dns_tunnel_port", 5300)
         server_ip = data.get("server_ip", "your_server_ip")
-        target = "127.0.0.1:22"
-
-        # ---- SAFE DNS HANDLING ----
-        # Check if systemd-resolved is using port 53
-        resolved_running = Shell.run("systemctl is-active systemd-resolved", check=False).ok
-        if resolved_running:
-            log.info("systemd-resolved is running. We'll free port 53 by stopping it temporarily.")
-            # Save the current resolv.conf to restore later
-            Shell.run("cp /etc/resolv.conf /etc/resolv.conf.backup", check=False)
-            # Stop systemd-resolved
-            Shell.run("systemctl stop systemd-resolved", check=False)
-            Shell.run("systemctl disable systemd-resolved", check=False)
-            # Set a fallback DNS server to keep the system online
-            Shell.run('echo "nameserver 8.8.8.8" > /etc/resolv.conf', check=False)
+        target = "127.0.0.1:22"  # default target
 
         # 1. Install Go if not present
         Shell.run("apt-get install -y golang-go git", check=True)
@@ -58,7 +45,7 @@ class DnsTunnelFeature(BaseFeature):
         Shell.run("chmod +x /usr/local/bin/dnstt-server", check=True)
         Shell.run("rm -rf /tmp/dnstt", check=False)
 
-        # 3. Generate keys
+        # 3. Generate DNSTT keys (correct flags: -pubkey-file and -privkey-file)
         DNSTT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         log.info("Generating DNSTT keys...")
         Shell.run(
@@ -110,15 +97,7 @@ WantedBy=multi-user.target
         DNSTT_SERVICE.unlink(missing_ok=True)
         DNSTT_CONFIG_DIR.unlink(missing_ok=True)
         DNSTT_BIN.unlink(missing_ok=True)
-        port = state.get("dns_tunnel_port", 53)
+        port = state.get("dns_tunnel_port", 5300)
         Shell.run(f"ufw delete allow {port}/udp", check=False)
         Shell.run("systemctl daemon-reload", check=False)
-
-        # ---- RESTORE DNS ----
-        # Restore systemd-resolved if it was stopped
-        if Path("/etc/resolv.conf.backup").exists():
-            Shell.run("mv /etc/resolv.conf.backup /etc/resolv.conf", check=False)
-        Shell.run("systemctl enable systemd-resolved", check=False)
-        Shell.run("systemctl start systemd-resolved", check=False)
-
-        log.info("DNSTT removed and DNS restored.")
+        log.info("DNSTT removed.")
