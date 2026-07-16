@@ -11,7 +11,7 @@ from features.base import BaseFeature
 
 
 class CloudflareStrategy:
-    def __init__(self, email: str | None, api_key: str, domain: str):
+    def __init__(self, email: str, api_key: str, domain: str):
         self.email = email
         self.api_key = api_key
         self.domain = domain
@@ -31,14 +31,12 @@ class CloudflareStrategy:
         log.info(f"Requesting Cloudflare Origin Certificate for {self.domain}")
         key_text, csr_text, key_path = self._generate_csr()
 
-        headers = {"Content-Type": "application/json"}
-        if self.api_key.startswith("cfk_"):
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        else:
-            if not self.email:
-                raise CertificateError("Global API Key requires email.")
-            headers["X-Auth-Email"] = self.email
-            headers["X-Auth-Key"] = self.api_key
+        # Always use Global API Key method (X-Auth-Email + X-Auth-Key)
+        headers = {
+            "Content-Type": "application/json",
+            "X-Auth-Email": self.email,
+            "X-Auth-Key": self.api_key,
+        }
 
         payload = {
             "hostnames": [self.domain],
@@ -47,7 +45,6 @@ class CloudflareStrategy:
             "csr": csr_text.strip(),
         }
 
-        # Use domain name – system DNS will resolve it
         url = "https://api.cloudflare.com/client/v4/certificates"
 
         max_retries = 3
@@ -139,7 +136,7 @@ class CertificatesFeature(BaseFeature):
             email = input("Cloudflare Account Email: ").strip()
             if not email:
                 raise CertificateError("Email is required.")
-            api_key = input("Cloudflare Global API Key (or Token starting with cfk_): ").strip()
+            api_key = input("Cloudflare Global API Key: ").strip()
             if not api_key:
                 raise CertificateError("API Key is required.")
 
