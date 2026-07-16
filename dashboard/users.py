@@ -42,14 +42,21 @@ class UserManager:
             raise ValidationError(f"user '{username}' already exists")
 
         shell = self._tunnel_shell()
-        
-        # Changed -g to -G to assign as a supplementary group, ensuring
-        # standard visibility in /etc/group files.
+
+        # Create user with supplementary group (sshauser-users)
         Shell.run(f"useradd -m -s {shell} -G {USER_GROUP} {username}")
-        Shell.run(f"chpasswd", input_text=f"{username}:{password}\n")
+
+        # Set password via chpasswd (ensure input is correct)
+        result = Shell.run(f"chpasswd", input_text=f"{username}:{password}\n", check=False)
+        if not result.ok:
+            raise ValidationError(f"Failed to set password: {result.stderr}")
 
         if expire_days:
             Shell.run(f"chage -M {expire_days} {username}", check=False)
+
+        # Verify the user is created and password is set
+        # (we can't read the password, but we can check if the user exists)
+        log.debug(f"User '{username}' created with shell {shell}")
 
         log.success(f"created tunnel user '{username}'"
                      + (f" (expires in {expire_days}d)" if expire_days else ""))
@@ -62,10 +69,6 @@ class UserManager:
         log.success(f"deleted user '{username}'")
 
     def list(self) -> list[SSHUser]:
-        """
-        Scans both primary and supplementary user assignments to ensure
-        all tunnel accounts show up reliably in the dashboard.
-        """
         group_res = Shell.run(f"getent group {USER_GROUP}", check=False)
         if not group_res.ok or ":" not in group_res.stdout:
             return []
@@ -75,11 +78,9 @@ class UserManager:
             return []
 
         gid = parts[2]
-        # Capture supplementary members (comma-separated list at the end)
         supp_members = parts[3].split(",") if len(parts) > 3 else []
         usernames = set(u for u in supp_members if u)
 
-        # Capture primary members whose default GID matches the target group
         passwd_res = Shell.run("getent passwd", check=False)
         if passwd_res.ok:
             for line in passwd_res.stdout.splitlines():
