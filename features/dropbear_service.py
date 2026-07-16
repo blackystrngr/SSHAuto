@@ -16,7 +16,6 @@ class DropbearServiceFeature(BaseFeature):
         data = state.ensure_defaults()
         port = data.get("dropbear_port", DROPBEAR_PORT_DEFAULT)
 
-        # Write banner and defaults
         DROPBEAR_BANNER_PATH.write_text("Authorized Tunnel Access Only.\n")
         config = f"""NO_START=0
 DROPBEAR_PORT={port}
@@ -27,11 +26,9 @@ DROPBEAR_RECEIVE_WINDOW=65536
         DROPBEAR_DEFAULTS_FILE.write_text(config)
         log.info(f"Dropbear defaults written (port {port})")
 
-        # Kill any existing dropbear processes
         Shell.run("pkill -f dropbear", check=False)
         time.sleep(1)
 
-        # Create a simple systemd service that starts dropbear directly
         service_content = f"""[Unit]
 Description=Dropbear SSH Tunnel Backend
 After=network.target
