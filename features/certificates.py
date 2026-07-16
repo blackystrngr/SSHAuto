@@ -25,17 +25,18 @@ class CloudflareStrategy:
 
     def _generate_csr(self) -> tuple[str, str, str]:
         """Generate private key and CSR using OpenSSL. Returns (key, csr, key_path)."""
-        key_path = SSHAUTO_CERT_DIR / self.domain / "privkey.pem"
-        csr_path = SSHAUTO_CERT_DIR / self.domain / "csr.pem"
-        SSHAUTO_CERT_DIR.mkdir(parents=True, exist_ok=True)
-
+        domain_dir = SSHAUTO_CERT_DIR / self.domain
+        domain_dir.mkdir(parents=True, exist_ok=True)   # <- create domain subdir
+        key_path = domain_dir / "privkey.pem"
+        csr_path = domain_dir / "csr.pem"
+    
         # Generate private key
         Shell.run(
             f"openssl genrsa -out {key_path} 2048",
             check=True,
             timeout=10
         )
-
+    
         # Generate CSR
         subj = f"/CN={self.domain}"
         Shell.run(
@@ -43,7 +44,7 @@ class CloudflareStrategy:
             check=True,
             timeout=10
         )
-
+    
         csr_text = csr_path.read_text()
         key_text = key_path.read_text()
         return key_text, csr_text, str(key_path)
