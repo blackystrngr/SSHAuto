@@ -20,28 +20,17 @@ if ! grep -qiE 'debian|ubuntu' /etc/os-release 2>/dev/null; then
     exit 1
 fi
 
-# ---- 1. UPDATE APT & INSTALL DEPENDENCIES ----
+# ---- 1. INSTALL DEPENDENCIES ----
 c_cyan "==> Updating apt and installing bootstrap dependencies"
 apt-get update -y
-DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip git curl wget ca-certificates dnsutils
+DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip git curl wget ca-certificates
 
 # ---- 2. CLEAR GIT PROXY ----
 c_cyan "==> Removing any stuck Git proxy settings..."
 git config --global --unset http.proxy 2>/dev/null || true
 git config --global --unset https.proxy 2>/dev/null || true
 
-# ---- 3. TEST DNS (no changes) ----
-c_cyan "==> Testing DNS resolution..."
-if ! nslookup github.com >/dev/null 2>&1; then
-    c_red "DNS resolution for github.com failed."
-    c_red "Please ensure your DNS is working. You can test with: nslookup github.com"
-    c_red "If DNS is blocked, you can manually clone the repo and run:"
-    c_red "  sudo python3 ${APP_ROOT}/main.py install --force"
-    exit 1
-fi
-c_green "DNS is working."
-
-# ---- 4. CLONE FRESH WITH RETRIES ----
+# ---- 3. CLONE WITH RETRIES ----
 c_cyan "==> Cloning sshauto into ${APP_ROOT}"
 rm -rf "${APP_ROOT}"
 
@@ -71,7 +60,7 @@ fi
 
 c_green "Clone successful."
 
-# ---- 5. SETUP PERMISSIONS & DEPENDENCIES ----
+# ---- 4. SETUP PERMISSIONS & DEPENDENCIES ----
 chmod +x "${APP_ROOT}/main.py"
 if [[ -d "${APP_ROOT}/scripts" ]]; then
     chmod +x "${APP_ROOT}/scripts/"*.py 2>/dev/null || true
@@ -84,7 +73,7 @@ else
     c_red "Warning: requirements.txt not found in ${APP_ROOT}"
 fi
 
-# ---- 6. RUN INSTALLER ----
+# ---- 5. RUN INSTALLER ----
 c_cyan "==> Running the automated installer (--force to rewrite all configs)"
 python3 "${APP_ROOT}/main.py" install --force
 
