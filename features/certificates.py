@@ -5,8 +5,6 @@ Supports both Global API Key (with email) and API Token (Bearer).
 from __future__ import annotations
 
 import datetime
-import json
-import subprocess
 from pathlib import Path
 import requests
 
@@ -25,18 +23,20 @@ class CloudflareStrategy:
 
     def _generate_csr(self) -> tuple[str, str, str]:
         """Generate private key and CSR using OpenSSL. Returns (key, csr, key_path)."""
+        # Ensure domain directory exists
         domain_dir = SSHAUTO_CERT_DIR / self.domain
-        domain_dir.mkdir(parents=True, exist_ok=True)   # <- create domain subdir
+        domain_dir.mkdir(parents=True, exist_ok=True)
+
         key_path = domain_dir / "privkey.pem"
         csr_path = domain_dir / "csr.pem"
-    
+
         # Generate private key
         Shell.run(
             f"openssl genrsa -out {key_path} 2048",
             check=True,
             timeout=10
         )
-    
+
         # Generate CSR
         subj = f"/CN={self.domain}"
         Shell.run(
@@ -44,7 +44,7 @@ class CloudflareStrategy:
             check=True,
             timeout=10
         )
-    
+
         csr_text = csr_path.read_text()
         key_text = key_path.read_text()
         return key_text, csr_text, str(key_path)
@@ -57,12 +57,10 @@ class CloudflareStrategy:
 
         # Build headers
         headers = {"Content-Type": "application/json"}
-        # If API key starts with "cfk_", treat as token (Bearer)
         if self.api_key.startswith("cfk_"):
             headers["Authorization"] = f"Bearer {self.api_key}"
             log.info("Using API Token (Bearer) authentication.")
         else:
-            # Global API Key – requires email
             if not self.email:
                 raise CertificateError("Global API Key requires email address.")
             headers["X-Auth-Email"] = self.email
@@ -95,7 +93,8 @@ class CloudflareStrategy:
         cert_text = result["certificate"]
 
         # Save fullchain (certificate only; Cloudflare returns the full chain)
-        cert_path = SSHAUTO_CERT_DIR / self.domain / "fullchain.pem"
+        domain_dir = SSHAUTO_CERT_DIR / self.domain
+        cert_path = domain_dir / "fullchain.pem"
         cert_path.write_text(cert_text)
 
         # Also store in Let's Encrypt style path for compatibility
@@ -141,7 +140,6 @@ class CertificatesFeature(BaseFeature):
         state.set("cert_domain", domain)
         data["cert_domain"] = domain
 
-        # Ask for API key type
         print()
         api_type = input("Use Global API Key (with email) or API Token? [G/T] (default G): ").strip().upper()
         if api_type == "T":
