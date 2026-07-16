@@ -1,5 +1,5 @@
 """
-Helper functions to restart all tunnel services (excluding Squid).
+Helper functions to restart all tunnel services (only if they exist).
 """
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import time
 from core.logger import log
 from core.shell import Shell
 
+# List of services we might want to restart – but we'll check existence first.
 SERVICES = [
     "nginx",
     "dropbear-tunnel",
@@ -19,9 +20,15 @@ SERVICES = [
 ]
 
 
+def service_exists(service: str) -> bool:
+    """Check if a systemd service exists."""
+    check = Shell.run(f"systemctl cat {service}", check=False, timeout=5)
+    return check.ok  # if 'cat' returns 0, the unit exists
+
+
 def restart_service(service: str) -> bool:
-    check = Shell.run(f"systemctl status {service}", check=False, timeout=5)
-    if "Unit" in check.stdout and "not found" in check.stdout:
+    """Restart a single service only if it exists."""
+    if not service_exists(service):
         log.debug(f"{service} not installed, skipping.")
         return True
 
@@ -46,12 +53,14 @@ def restart_service(service: str) -> bool:
 
 
 def restart_all_services() -> None:
-    log.important("Restarting all services (excluding Squid)...")
+    log.important("Restarting existing services...")
     results = {}
     for svc in SERVICES:
         results[svc] = restart_service(svc)
     ok = sum(1 for v in results.values() if v)
+    total = sum(1 for v in results.values() if v is not None)  # we count all attempts
     log.info(f"Services restarted: {ok}/{len(SERVICES)}")
     if ok < len(SERVICES):
-        failed = [s for s, v in results.items() if not v]
-        log.warning(f"Failed services: {', '.join(failed)}")
+        failed = [s for s, v in results.items() if not v and v is not None]
+        if failed:
+            log.warning(f"Failed services: {', '.join(failed)}")
