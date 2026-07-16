@@ -6,7 +6,7 @@ from pathlib import Path
 from features.base import BaseFeature
 from core.shell import Shell
 from core.logger import log
-from core.config import state, PROXY_PORT_DEFAULT
+from core.config import state, PROXY_PORT_DEFAULT, LOG_DIR
 
 PROXY_BIN = Path("/usr/local/bin/ws_ssh_proxy.py")
 SERVICE_NAME = "ws-ssh-proxy.service"
@@ -33,30 +33,35 @@ class PythonProxyFeature(BaseFeature):
         proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
 
         if proxy_port in (8000, 8001):
-            log.info(f"Migrating proxy port from {proxy_port} to {PROXY_PORT_DEFAULT}")
             proxy_port = PROXY_PORT_DEFAULT
             data["proxy_port"] = proxy_port
             state.save(data)
 
         if not self._port_available(proxy_port):
-            log.warning(f"Port {proxy_port} is busy. Finding an available port...")
             new_port = find_available_port(proxy_port + 1)
-            log.info(f"Using alternative port {new_port}")
             proxy_port = new_port
             state.set("proxy_port", proxy_port)
 
         dropbear_port = data.get("dropbear_port", 110)
 
-        # Install uvloop (the proxy script will import it)
-        log.info("Installing uvloop...")
+        # Ensure log directory exists
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Install uvloop (if not installed)
         Shell.run("pip3 install uvloop --break-system-packages", check=False, timeout=30)
 
+        # ----- Proxy script (with log dir creation) -----
         proxy_code = f'''#!/usr/bin/env python3
 import asyncio
 import socket
 import logging
 import time
 import sys
+from pathlib import Path
+
+# Ensure log directory exists
+LOG_DIR = Path("/var/log/sshauto")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 try:
     import uvloop
@@ -66,7 +71,7 @@ except ImportError:
     uvloop_used = False
 
 logging.basicConfig(
-    filename='/var/log/sshauto/proxy.log',
+    filename=str(LOG_DIR / "proxy.log"),
     level=logging.INFO,
     format='%(asctime)s %(levelname)s %(message)s'
 )
@@ -130,14 +135,12 @@ async def handle_client(reader, writer):
         key, value = line.decode().strip().split(':', 1)
         headers[key.lower()] = value.strip()
 
-    # WebSocket upgrade first (any method)
     upgrade = headers.get('upgrade', '').lower()
     if upgrade == 'websocket':
         logging.info(f"WebSocket upgrade from {{peername}} (method: {{method}})")
         await handle_websocket(reader, writer)
         return
 
-    # CONNECT
     if method.upper() == 'CONNECT':
         if ':' not in raw_target:
             writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
@@ -154,7 +157,6 @@ async def handle_client(reader, writer):
         await handle_connect(reader, writer, host, port)
         return
 
-    # Other methods
     writer.write(b'HTTP/1.1 405 Method Not Allowed\\r\\n\\r\\n')
     writer.close()
     logging.info(f"Unsupported request from {{peername}}")
@@ -262,7 +264,6 @@ if __name__ == '__main__':
         PROXY_BIN.write_text(proxy_code)
         PROXY_BIN.chmod(0o755)
 
-        # systemd service file (no custom timeouts)
         service_content = f"""[Unit]
 Description=Unified Proxy (WebSocket + CONNECT)
 After=network.target dropbear-tunnel.service
@@ -288,22 +289,19 @@ WantedBy=multi-user.target
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
         Shell.run(f"systemctl reset-failed {SERVICE_NAME}", check=False, timeout=10)
 
-        # Start the service – uses systemd default timeout
-        start_result = Shell.run(f"systemctl start {SERVICE_NAME}", check=False, timeout=60)
-        if not start_result.ok:
-            log.error(f"Proxy start failed (exit {start_result.returncode}): {start_result.stderr}")
-            Shell.run(f"journalctl -u {SERVICE_NAME} --no-pager -n 30", check=False)
-            raise Exception("Proxy failed to start. See journalctl output.")
+        result = Shell.run(f"systemctl start {SERVICE_NAME}", check=False, timeout=30)
+        if not result.ok:
+            log.error(f"Proxy start failed: {result.stderr}")
+            Shell.run(f"journalctl -u {SERVICE_NAME} --no-pager -n 20", check=False)
+            raise Exception("Proxy failed to start")
 
-        # Give it a moment to become active
         time.sleep(2)
         status = Shell.run(f"systemctl is-active {SERVICE_NAME}", check=False, timeout=5)
         if not status.ok or "active" not in status.stdout:
-            log.error(f"Proxy service is not active (status: {status.stdout})")
-            Shell.run(f"journalctl -u {SERVICE_NAME} --no-pager -n 20", check=False)
-            raise Exception("Proxy service installed but not active.")
+            log.error(f"Proxy is not active: {status.stdout}")
+            raise Exception("Proxy not active")
 
-        log.success(f"Unified Python Proxy installed on port {proxy_port}.")
+        log.success(f"Proxy installed on port {proxy_port}")
 
     def remove(self) -> None:
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
