@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# sshauto bootstrap installer – respects system DNS.
 set -euo pipefail
 
 REPO_URL="https://github.com/blackystrngr/SSHAuto"
@@ -11,70 +10,33 @@ c_green() { printf '\033[32m%s\033[0m\n' "$1"; }
 c_cyan()  { printf '\033[36m%s\033[0m\n' "$1"; }
 
 if [[ $EUID -ne 0 ]]; then
-    c_red "This installer must run as root (try: sudo bash install.sh)"
+    c_red "Must run as root"
     exit 1
 fi
 
-if ! grep -qiE 'debian|ubuntu' /etc/os-release 2>/dev/null; then
-    c_red "Only Debian/Ubuntu family systems are supported."
+if ! grep -qiE 'debian|ubuntu' /etc/os-release; then
+    c_red "Only Ubuntu/Debian supported"
     exit 1
 fi
 
-# ---- 1. INSTALL DEPENDENCIES ----
-c_cyan "==> Updating apt and installing bootstrap dependencies"
+c_cyan "==> Installing dependencies"
 apt-get update -y
-DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip git curl wget ca-certificates
+apt-get install -y python3 python3-pip git curl wget ca-certificates
 
-# ---- 2. CLEAR GIT PROXY ----
-c_cyan "==> Removing any stuck Git proxy settings..."
+c_cyan "==> Removing git proxy settings"
 git config --global --unset http.proxy 2>/dev/null || true
 git config --global --unset https.proxy 2>/dev/null || true
 
-# ---- 3. CLONE WITH RETRIES ----
-c_cyan "==> Cloning sshauto into ${APP_ROOT}"
+c_cyan "==> Cloning repository"
 rm -rf "${APP_ROOT}"
+git clone --branch "${BRANCH}" --depth 1 "${REPO_URL}" "${APP_ROOT}"
 
-max_retries=5
-retry_delay=5
-attempt=0
-clone_success=1
-
-while [[ $attempt -lt $max_retries ]]; do
-    attempt=$((attempt + 1))
-    c_cyan "Clone attempt $attempt/$max_retries..."
-    if git clone --branch "${BRANCH}" --depth 1 "${REPO_URL}" "${APP_ROOT}"; then
-        clone_success=0
-        break
-    fi
-    c_red "Clone attempt $attempt failed. Retrying in ${retry_delay}s..."
-    sleep "${retry_delay}"
-done
-
-if [[ $clone_success -ne 0 ]]; then
-    c_red "Clone failed after ${max_retries} attempts."
-    c_red "Please check your internet connection."
-    c_red "If you have the repo locally, copy it to ${APP_ROOT} and run:"
-    c_red "  sudo python3 ${APP_ROOT}/main.py install --force"
-    exit 1
-fi
-
-c_green "Clone successful."
-
-# ---- 4. SETUP PERMISSIONS & DEPENDENCIES ----
 chmod +x "${APP_ROOT}/main.py"
-if [[ -d "${APP_ROOT}/scripts" ]]; then
-    chmod +x "${APP_ROOT}/scripts/"*.py 2>/dev/null || true
-fi
 
-c_cyan "==> Installing Python dependencies from requirements.txt"
-if [[ -f "${APP_ROOT}/requirements.txt" ]]; then
-    pip3 install --break-system-packages --upgrade -r "${APP_ROOT}/requirements.txt"
-else
-    c_red "Warning: requirements.txt not found in ${APP_ROOT}"
-fi
+c_cyan "==> Installing Python dependencies"
+pip3 install --break-system-packages --upgrade -r "${APP_ROOT}/requirements.txt"
 
-# ---- 5. RUN INSTALLER ----
-c_cyan "==> Running the automated installer (--force to rewrite all configs)"
+c_cyan "==> Running installer"
 python3 "${APP_ROOT}/main.py" install --force
 
-c_green "==> Done. Type 'kk' any time to open the dashboard."
+c_green "Done. Type 'kk' to open dashboard."
