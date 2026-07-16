@@ -35,12 +35,6 @@ iptables -t nat -Z
 iptables -t mangle -Z
 iptables -t raw -Z
 
-# Set default policies to ACCEPT (safe for setup)
-iptables -P INPUT ACCEPT
-iptables -P FORWARD ACCEPT
-iptables -P OUTPUT ACCEPT
-
-c_green "iptables flushed and default policies set to ACCEPT."
 
 # ---- 2. INSTALL DEPENDENCIES ----
 c_cyan "==> Updating apt and installing bootstrap dependencies"
