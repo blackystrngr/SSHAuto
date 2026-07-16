@@ -20,26 +20,16 @@ if ! grep -qiE 'debian|ubuntu' /etc/os-release 2>/dev/null; then
     exit 1
 fi
 
-# ---- 1. HARDEN DNS (survives reboots, systemd, network restarts) ----
+# ---- 1. HARDEN DNS (reliable resolvers) ----
 c_cyan "==> Setting reliable DNS resolvers (8.8.8.8, 1.1.1.1)..."
-# Override /etc/resolv.conf directly (for legacy tools)
 echo "nameserver 8.8.8.8" > /etc/resolv.conf
 echo "nameserver 1.1.1.1" >> /etc/resolv.conf
-chattr +i /etc/resolv.conf 2>/dev/null || true  # prevent overwrite
+chattr +i /etc/resolv.conf 2>/dev/null || true  # make it immutable (prevents overwrite)
 
-# Also set via systemd-resolved (if active)
-if command -v resolvectl &>/dev/null; then
-    resolvectl set-dns 8.8.8.8 1.1.1.1
-    resolvectl set-domain ~.
-    resolvectl flush-caches
-fi
-
-# Flush DNS cache (multiple methods)
+# Flush DNS cache (if systemd-resolved is used)
 if command -v systemd-resolve &>/dev/null; then
+    c_cyan "Flushing DNS cache..."
     systemd-resolve --flush-caches 2>/dev/null || true
-fi
-if command -v resolvectl &>/dev/null; then
-    resolvectl flush-caches 2>/dev/null || true
 fi
 
 # ---- 2. TEST DNS BEFORE DOING ANYTHING ----
@@ -56,7 +46,7 @@ while [[ $attempt -lt $max_retries ]]; do
     c_red "DNS test attempt $attempt/$max_retries failed. Retrying in 3s..."
     sleep 3
     # Flush cache again
-    resolvectl flush-caches 2>/dev/null || true
+    systemd-resolve --flush-caches 2>/dev/null || true
 done
 if [[ $dns_ok -eq 0 ]]; then
     c_red "DNS resolution for github.com still failing after $max_retries attempts."
@@ -94,7 +84,7 @@ while [[ $attempt -lt $max_retries ]]; do
     c_red "Clone attempt $attempt failed. Retrying in ${retry_delay}s..."
     sleep "${retry_delay}"
     # flush DNS again before retry
-    resolvectl flush-caches 2>/dev/null || true
+    systemd-resolve --flush-caches 2>/dev/null || true
 done
 
 if [[ $clone_success -ne 0 ]]; then
