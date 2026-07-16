@@ -74,25 +74,46 @@ logging.info(f"Proxy starting, uvloop: {{uvloop_used}}")
 
 DROPBEAR_PORT = {dropbear_port}
 PROXY_PORT = {proxy_port}
+READ_CHUNK = 262144  # 256KB
 
-def set_socket_quickack(sock):
+def tune_socket(sock):
+    """Apply every low‑latency socket option in one place."""
     try:
-        sock.setsockopt(socket.IPPROTO_TCP, 12, 1)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4194304)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4194304)
+        sock.setsockopt(socket.IPPROTO_TCP, 12, 1)  # TCP_QUICKACK
+    except Exception:
+        pass
+    try:
+        # Busy‑poll: trades a little CPU for lower wake‑up latency
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BUSY_POLL, 50)
     except Exception:
         pass
 
-async def pipe(src, dst, direction=""):
-    try:
-        while True:
-            data = await src.read(65536)  # larger read chunk
-            if not data:
-                break
-            dst.write(data)
-            await dst.drain()
-    except Exception as e:
-        logging.debug(f"pipe {{direction}} error: {{e}}")
-    finally:
-        dst.close()
+async def relay(a_reader, a_writer, b_reader, b_writer):
+    """Bidirectional pump, stops as soon as either side finishes."""
+    async def pump(src, dst):
+        try:
+            while True:
+                data = await src.read(READ_CHUNK)
+                if not data:
+                    return
+                dst.write(data)
+                await dst.drain()
+        except Exception:
+            return
+
+    t1 = asyncio.ensure_future(pump(a_reader, b_writer))
+    t2 = asyncio.ensure_future(pump(b_reader, a_writer))
+    _, pending = await asyncio.wait({{t1, t2}}, return_when=asyncio.FIRST_COMPLETED)
+    for t in pending:
+        t.cancel()
+    for w in (a_writer, b_writer):
+        try:
+            w.close()
+        except Exception:
+            pass
 
 async def handle_client(reader, writer):
     start_time = time.time()
@@ -101,10 +122,7 @@ async def handle_client(reader, writer):
 
     sock = writer.get_extra_info('socket')
     if sock:
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4194304)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4194304)
-        set_socket_quickack(sock)
+        tune_socket(sock)
 
     try:
         first_line = await reader.readline()
@@ -158,7 +176,10 @@ async def handle_client(reader, writer):
 
 async def handle_connect(reader, writer, host, port):
     try:
-        ssh_reader, ssh_writer = await asyncio.open_connection(host, port)
+        ssh_reader, ssh_writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port),
+            timeout=5.0
+        )
     except Exception as e:
         logging.error(f"CONNECT failed: {{e}}")
         writer.write(b'HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n')
@@ -171,16 +192,10 @@ async def handle_connect(reader, writer, host, port):
 
     ssh_sock = ssh_writer.get_extra_info('socket')
     if ssh_sock:
-        ssh_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4194304)
-        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4194304)
-        set_socket_quickack(ssh_sock)
+        tune_socket(ssh_sock)
 
     try:
-        await asyncio.gather(
-            pipe(reader, ssh_writer, "client->ssh"),
-            pipe(ssh_reader, writer, "ssh->client")
-        )
+        await relay(reader, writer, ssh_reader, ssh_writer)
     except Exception as e:
         logging.error(f"CONNECT tunnel error: {{e}}")
     finally:
@@ -194,27 +209,30 @@ async def handle_websocket(reader, writer):
     writer.write(b'\\r\\n')
     await writer.drain()
 
-    # Connect to Dropbear without delay
-    try:
-        ssh_reader, ssh_writer = await asyncio.open_connection('127.0.0.1', DROPBEAR_PORT)
-    except Exception as e:
-        logging.error(f"Dropbear connection failed: {{e}}")
+    ssh_reader = ssh_writer = None
+    for attempt in range(3):
+        try:
+            ssh_reader, ssh_writer = await asyncio.wait_for(
+                asyncio.open_connection('127.0.0.1', DROPBEAR_PORT),
+                timeout=2.0
+            )
+            break
+        except Exception as e:
+            logging.warning(f"Dropbear connection attempt {{attempt+1}}/3 failed: {{e}}")
+            if attempt < 2:
+                await asyncio.sleep(0.5)
+    if not ssh_reader:
+        logging.error("Could not connect to Dropbear after 3 attempts")
         writer.close()
         return
 
     ssh_sock = ssh_writer.get_extra_info('socket')
     if ssh_sock:
-        ssh_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4194304)
-        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4194304)
-        set_socket_quickack(ssh_sock)
+        tune_socket(ssh_sock)
 
     logging.info(f"WebSocket tunnel established")
     try:
-        await asyncio.gather(
-            pipe(reader, ssh_writer, "client->ssh"),
-            pipe(ssh_reader, writer, "ssh->client")
-        )
+        await relay(reader, writer, ssh_reader, ssh_writer)
     except Exception as e:
         logging.error(f"WebSocket tunnel error: {{e}}")
     finally:
@@ -224,17 +242,16 @@ async def handle_websocket(reader, writer):
 async def main():
     server = await asyncio.start_server(
         handle_client, '127.0.0.1', PROXY_PORT,
-        backlog=512,
+        backlog=1024,
         reuse_address=True,
     )
     for s in server.sockets:
-        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        tune_socket(s)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4194304)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4194304)
-            set_socket_quickack(s)
-        except:
+            # TCP Fast Open on listening socket (queue length 256)
+            s.setsockopt(socket.IPPROTO_TCP, getattr(socket, "TCP_FASTOPEN", 23), 256)
+        except Exception:
             pass
 
     logging.info(f"Proxy listening on 127.0.0.1:{{PROXY_PORT}} (uvloop: {{uvloop_used}})")
@@ -248,7 +265,7 @@ if __name__ == '__main__':
         PROXY_BIN.chmod(0o755)
 
         service_content = f"""[Unit]
-Description=Unified Proxy (WebSocket + CONNECT) - High Performance
+Description=Unified Proxy (WebSocket + CONNECT)
 After=network.target dropbear-tunnel.service
 Wants=dropbear-tunnel.service
 
@@ -256,11 +273,14 @@ Wants=dropbear-tunnel.service
 Type=simple
 ExecStart=/usr/bin/python3 {PROXY_BIN}
 Restart=always
-RestartSec=1
+RestartSec=2
 User=root
 Nice=-20
 CPUSchedulingPolicy=rr
 CPUSchedulingPriority=99
+IOSchedulingClass=realtime
+IOSchedulingPriority=0
+LimitNOFILE=1048576
 StandardOutput=append:/var/log/sshauto/proxy.log
 StandardError=append:/var/log/sshauto/proxy.log
 
@@ -287,7 +307,7 @@ WantedBy=multi-user.target
             log.error(f"Proxy is not active: {status.stdout}")
             raise Exception("Proxy not active")
 
-        log.success(f"Proxy installed on port {proxy_port} with high performance settings")
+        log.success(f"Proxy installed on port {proxy_port} (perf‑tuned)")
 
     def remove(self) -> None:
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
