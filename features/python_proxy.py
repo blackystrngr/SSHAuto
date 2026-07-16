@@ -44,13 +44,9 @@ class PythonProxyFeature(BaseFeature):
 
         dropbear_port = data.get("dropbear_port", 110)
 
-        # Ensure log directory exists
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-        # Install uvloop (if not installed)
         Shell.run("pip3 install uvloop --break-system-packages", check=False, timeout=30)
 
-        # ----- Proxy script (with log dir creation) -----
         proxy_code = f'''#!/usr/bin/env python3
 import asyncio
 import socket
@@ -59,7 +55,6 @@ import time
 import sys
 from pathlib import Path
 
-# Ensure log directory exists
 LOG_DIR = Path("/var/log/sshauto")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -89,7 +84,7 @@ def set_socket_quickack(sock):
 async def pipe(src, dst, direction=""):
     try:
         while True:
-            data = await src.read(16384)
+            data = await src.read(65536)  # larger read chunk
             if not data:
                 break
             dst.write(data)
@@ -107,8 +102,8 @@ async def handle_client(reader, writer):
     sock = writer.get_extra_info('socket')
     if sock:
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1048576)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4194304)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4194304)
         set_socket_quickack(sock)
 
     try:
@@ -163,10 +158,7 @@ async def handle_client(reader, writer):
 
 async def handle_connect(reader, writer, host, port):
     try:
-        ssh_reader, ssh_writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port),
-            timeout=5.0
-        )
+        ssh_reader, ssh_writer = await asyncio.open_connection(host, port)
     except Exception as e:
         logging.error(f"CONNECT failed: {{e}}")
         writer.write(b'HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n')
@@ -180,8 +172,8 @@ async def handle_connect(reader, writer, host, port):
     ssh_sock = ssh_writer.get_extra_info('socket')
     if ssh_sock:
         ssh_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1048576)
-        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
+        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4194304)
+        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4194304)
         set_socket_quickack(ssh_sock)
 
     try:
@@ -202,28 +194,19 @@ async def handle_websocket(reader, writer):
     writer.write(b'\\r\\n')
     await writer.drain()
 
-    ssh_reader = ssh_writer = None
-    for attempt in range(3):
-        try:
-            ssh_reader, ssh_writer = await asyncio.wait_for(
-                asyncio.open_connection('127.0.0.1', DROPBEAR_PORT),
-                timeout=2.0
-            )
-            break
-        except Exception as e:
-            logging.warning(f"Dropbear connection attempt {{attempt+1}}/3 failed: {{e}}")
-            if attempt < 2:
-                await asyncio.sleep(0.5)
-    if not ssh_reader:
-        logging.error("Could not connect to Dropbear after 3 attempts")
+    # Connect to Dropbear without delay
+    try:
+        ssh_reader, ssh_writer = await asyncio.open_connection('127.0.0.1', DROPBEAR_PORT)
+    except Exception as e:
+        logging.error(f"Dropbear connection failed: {{e}}")
         writer.close()
         return
 
     ssh_sock = ssh_writer.get_extra_info('socket')
     if ssh_sock:
         ssh_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1048576)
-        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
+        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4194304)
+        ssh_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4194304)
         set_socket_quickack(ssh_sock)
 
     logging.info(f"WebSocket tunnel established")
@@ -241,15 +224,15 @@ async def handle_websocket(reader, writer):
 async def main():
     server = await asyncio.start_server(
         handle_client, '127.0.0.1', PROXY_PORT,
-        backlog=256,
+        backlog=512,
         reuse_address=True,
     )
     for s in server.sockets:
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1048576)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4194304)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4194304)
             set_socket_quickack(s)
         except:
             pass
@@ -265,7 +248,7 @@ if __name__ == '__main__':
         PROXY_BIN.chmod(0o755)
 
         service_content = f"""[Unit]
-Description=Unified Proxy (WebSocket + CONNECT)
+Description=Unified Proxy (WebSocket + CONNECT) - High Performance
 After=network.target dropbear-tunnel.service
 Wants=dropbear-tunnel.service
 
@@ -273,8 +256,11 @@ Wants=dropbear-tunnel.service
 Type=simple
 ExecStart=/usr/bin/python3 {PROXY_BIN}
 Restart=always
-RestartSec=2
+RestartSec=1
 User=root
+Nice=-20
+CPUSchedulingPolicy=rr
+CPUSchedulingPriority=99
 StandardOutput=append:/var/log/sshauto/proxy.log
 StandardError=append:/var/log/sshauto/proxy.log
 
@@ -301,7 +287,7 @@ WantedBy=multi-user.target
             log.error(f"Proxy is not active: {status.stdout}")
             raise Exception("Proxy not active")
 
-        log.success(f"Proxy installed on port {proxy_port}")
+        log.success(f"Proxy installed on port {proxy_port} with high performance settings")
 
     def remove(self) -> None:
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
