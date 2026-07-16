@@ -260,7 +260,7 @@ if __name__ == '__main__':
         PROXY_BIN.chmod(0o755)
 
         # Ensure uvloop is installed
-        Shell.run("pip3 install uvloop --break-system-packages", check=False, timeout=30)
+        Shell.run("pip3 install uvloop --break-system-packages", check=False, timeout=60)
 
         service_content = f"""[Unit]
 Description=Unified Proxy (WebSocket + CONNECT)
