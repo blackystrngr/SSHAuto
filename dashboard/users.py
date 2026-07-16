@@ -27,9 +27,18 @@ class SSHUser:
 class UserManager:
     def __init__(self):
         self._ensure_group()
+        self._ensure_shells()
 
     def _ensure_group(self):
         Shell.run(f"getent group {USER_GROUP} || groupadd {USER_GROUP}", check=False)
+
+    def _ensure_shells(self):
+        """Ensure /usr/sbin/nologin and /bin/false are in /etc/shells for Dropbear."""
+        for shell in ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false"):
+            if Shell.run(f"test -x {shell}", check=False).ok:
+                result = Shell.run(f"grep -Fx '{shell}' /etc/shells", check=False)
+                if not result.ok:
+                    Shell.run(f"echo {shell} >> /etc/shells", check=False)
 
     def create(self, username: str, password: str, expire_days: int | None = 30) -> SSHUser:
         if not USERNAME_RE.match(username):
