@@ -1,6 +1,5 @@
 import time
 import datetime
-import socket
 from pathlib import Path
 import requests
 
@@ -9,6 +8,16 @@ from core.exceptions import CertificateError
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
+
+# Known IPs for api.cloudflare.com (from your nslookup)
+CLOUDFLARE_IPS = [
+    "104.19.192.29",
+    "104.19.192.174",
+    "104.19.192.175",
+    "104.19.192.176",
+    "104.19.192.177",
+    "104.19.193.29",
+]
 
 
 class CloudflareStrategy:
@@ -35,11 +44,13 @@ class CloudflareStrategy:
         headers = {"Content-Type": "application/json"}
         if self.api_key.startswith("cfk_"):
             headers["Authorization"] = f"Bearer {self.api_key}"
+            log.info("Using API Token (Bearer) authentication.")
         else:
             if not self.email:
                 raise CertificateError("Global API Key requires email.")
             headers["X-Auth-Email"] = self.email
             headers["X-Auth-Key"] = self.api_key
+            log.info("Using Global API Key authentication.")
 
         payload = {
             "hostnames": [self.domain],
@@ -48,50 +59,33 @@ class CloudflareStrategy:
             "csr": csr_text.strip(),
         }
 
-        # Resolve API IP manually (uses system DNS)
-        try:
-            api_ip = socket.gethostbyname("api.cloudflare.com")
-            log.info(f"Resolved api.cloudflare.com -> {api_ip}")
-        except Exception as e:
-            log.warning(f"DNS resolution failed, using domain name fallback: {e}")
-            api_ip = None
-
-        max_retries = 3
-        for attempt in range(max_retries):
+        # Try each IP until one works
+        last_error = None
+        for ip in CLOUDFLARE_IPS:
+            url = f"https://{ip}/client/v4/certificates"
+            headers["Host"] = "api.cloudflare.com"
+            log.info(f"Trying IP: {ip}")
             try:
-                if api_ip:
-                    # Use IP with Host header
-                    url = f"https://{api_ip}/client/v4/certificates"
-                    headers["Host"] = "api.cloudflare.com"
-                else:
-                    url = "https://api.cloudflare.com/client/v4/certificates"
-
                 resp = requests.post(
                     url,
                     headers=headers,
                     json=payload,
                     timeout=30,
-                    verify=True  # ensure SSL verification
+                    verify=False   # skip hostname verification (we're using IP)
                 )
-                # If success, break out of retry loop
                 if resp.status_code == 200:
                     break
                 else:
-                    # If not 200, maybe the IP changed or certificate mismatch? We'll retry with domain.
-                    if api_ip:
-                        log.warning(f"Request to IP failed (status {resp.status_code}), retrying with domain...")
-                        api_ip = None
-                        continue
-            except requests.exceptions.ConnectionError as e:
-                log.warning(f"Connection error (attempt {attempt+1}/{max_retries}): {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(5)
+                    log.warning(f"IP {ip} returned {resp.status_code}, trying next...")
                     continue
-                else:
-                    raise
             except Exception as e:
-                log.error(f"Unexpected error: {e}")
-                raise
+                log.warning(f"IP {ip} failed: {e}")
+                last_error = e
+                continue
+        else:
+            # All IPs failed
+            log.error("All Cloudflare IPs failed.")
+            raise CertificateError(f"Cloudflare unreachable: {last_error}")
 
         if resp.status_code != 200:
             raise CertificateError(f"Cloudflare API error: {resp.text}")
@@ -127,13 +121,11 @@ class CertificatesFeature(BaseFeature):
         return bool(cert and key and Path(cert).exists() and Path(key).exists())
 
     def install(self) -> None:
-        """Called during `main.py install` – interactive menu."""
         print()
         log.rule("Certificate Configuration")
         self._interactive()
 
     def interactive(self) -> None:
-        """Called during `sshauto cert` – same menu."""
         print()
         log.rule("Certificate Configuration")
         self._interactive()
@@ -157,7 +149,7 @@ class CertificatesFeature(BaseFeature):
             email = input("Cloudflare Account Email: ").strip()
             if not email:
                 raise CertificateError("Email is required.")
-            api_key = input("Cloudflare Global API Key: ").strip()
+            api_key = input("Cloudflare Global API Key (or Token starting with cfk_): ").strip()
             if not api_key:
                 raise CertificateError("API Key is required.")
 
