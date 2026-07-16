@@ -54,7 +54,6 @@ import logging
 import time
 import sys
 
-# Try to use uvloop for speed, but fallback to default asyncio
 try:
     import uvloop
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -111,8 +110,6 @@ async def handle_client(reader, writer):
     if not first_line:
         writer.close()
         return
-    elapsed = round((time.time() - start_time) * 1000)
-    logging.info(f"Read first_line in {{elapsed}}ms")
 
     parts = first_line.decode().strip().split()
     if len(parts) < 3:
@@ -132,6 +129,14 @@ async def handle_client(reader, writer):
     elapsed = round((time.time() - start_time) * 1000)
     logging.info(f"Headers read in {{elapsed}}ms")
 
+    # === WebSocket upgrade takes priority (any method) ===
+    upgrade = headers.get('upgrade', '').lower()
+    if upgrade == 'websocket':
+        logging.info(f"WebSocket upgrade from {{peername}} (method: {{method}})")
+        await handle_websocket(reader, writer)
+        return
+
+    # === CONNECT handling ===
     if method.upper() == 'CONNECT':
         if ':' not in raw_target:
             writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
@@ -148,15 +153,10 @@ async def handle_client(reader, writer):
         await handle_connect(reader, writer, host, port)
         return
 
-    upgrade = headers.get('upgrade', '').lower()
-    if upgrade == 'websocket':
-        logging.info(f"WebSocket upgrade from {{peername}}")
-        await handle_websocket(reader, writer)
-        return
-
+    # === Unknown method ===
     writer.write(b'HTTP/1.1 405 Method Not Allowed\\r\\n\\r\\n')
     writer.close()
-    logging.info(f"Unsupported method {{method}} from {{peername}}")
+    logging.info(f"Unsupported request from {{peername}}")
 
 async def handle_connect(reader, writer, host, port):
     try:
@@ -273,7 +273,7 @@ RestartSec=2
 User=root
 StandardOutput=append:/var/log/sshauto/proxy.log
 StandardError=append:/var/log/sshauto/proxy.log
-TimeoutStartSec=30   # Wait up to 30 seconds for the service to start
+TimeoutStartSec=30
 
 [Install]
 WantedBy=multi-user.target
@@ -288,12 +288,11 @@ WantedBy=multi-user.target
 
         result = Shell.run(f"systemctl start {SERVICE_NAME}", check=False, timeout=30)
         if not result.ok:
-            log.error(f"Proxy start failed (exit {result.returncode}): {result.stderr}")
+            log.error(f"Proxy start failed: {result.stderr}")
             Shell.run(f"journalctl -u {SERVICE_NAME} --no-pager -n 20", check=False)
             raise Exception("Proxy failed to start. See journalctl output above.")
 
-        # Verify it's actually running
-        time.sleep(2)  # give it a moment to transition from activating to active
+        time.sleep(2)
         status = Shell.run(f"systemctl is-active {SERVICE_NAME}", check=False, timeout=5)
         if not status.ok or "active" not in status.stdout:
             log.error(f"Proxy service is not active (status: {status.stdout})")
