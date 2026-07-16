@@ -60,7 +60,7 @@ systemctl restart systemd-resolved
 rm -f /etc/resolv.conf
 echo "nameserver 1.1.1.1" > /etc/resolv.conf
 echo "nameserver 1.0.0.1" >> /etc/resolv.conf
-chattr +i /etc/resolv.conf 2>/dev/null || true  # prevent overwrite
+# prevent overwrite
 
 c_green "systemd-resolved configured with 1.1.1.1 and 1.0.0.1."
 
