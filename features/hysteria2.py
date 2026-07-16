@@ -1,6 +1,5 @@
 """
-Hysteria2 – UDP/QUIC tunnel using the official install script.
-Uses self‑signed certificate generated during installation.
+Hysteria2 – UDP/QUIC tunnel (optional). Default port: 443 UDP.
 """
 from __future__ import annotations
 
@@ -16,7 +15,7 @@ HYSTERIA_SERVICE = Path("/etc/systemd/system/hysteria-server.service")
 
 class Hysteria2Feature(BaseFeature):
     name = "hysteria2"
-    description = "Install Hysteria2 UDP/QUIC tunnel"
+    description = "Hysteria2 UDP/QUIC tunnel (optional)"
     depends_on = ["packages"]
 
     def is_installed(self) -> bool:
@@ -26,10 +25,10 @@ class Hysteria2Feature(BaseFeature):
         log.info("Installing Hysteria2...")
 
         data = state.ensure_defaults()
-        port = data.get("hysteria_port", 8443)
+        port = data.get("hysteria_port", 443)
         domain = data.get("hysteria_domain", "ns1.hi.blackstrngr.qzz.io")
         password = data.get("hysteria_password", "helloworld")
-        server_ip = data.get("server_ip", "your_vps_ip")
+        server_ip = data.get("server_ip", "your_server_ip")
 
         # 1. Run official install script
         log.info("Running official Hysteria2 installer...")
@@ -91,9 +90,10 @@ masquerade:
     def remove(self) -> None:
         Shell.run("systemctl stop hysteria-server", check=False)
         Shell.run("systemctl disable hysteria-server", check=False)
-        port = state.get("hysteria_port", 8443)
+        port = state.get("hysteria_port", 443)
         Shell.run(f"ufw delete allow {port}/udp", check=False)
         HYSTERIA_CONFIG.unlink(missing_ok=True)
         Path("/etc/hysteria/server.crt").unlink(missing_ok=True)
         Path("/etc/hysteria/server.key").unlink(missing_ok=True)
+        Shell.run("systemctl daemon-reload", check=False)
         log.info("Hysteria2 removed.")
