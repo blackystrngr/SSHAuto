@@ -20,19 +20,29 @@ if ! grep -qiE 'debian|ubuntu' /etc/os-release 2>/dev/null; then
     exit 1
 fi
 
-# ---- 1. HARDEN DNS (reliable resolvers) ----
+# ---- 1. HARDEN DNS ----
 c_cyan "==> Setting reliable DNS resolvers (8.8.8.8, 1.1.1.1)..."
 echo "nameserver 8.8.8.8" > /etc/resolv.conf
 echo "nameserver 1.1.1.1" >> /etc/resolv.conf
-chattr +i /etc/resolv.conf 2>/dev/null || true  # make it immutable (prevents overwrite)
+chattr +i /etc/resolv.conf 2>/dev/null || true  # lock to prevent overwrite
 
-# Flush DNS cache (if systemd-resolved is used)
+# ---- 2. UPDATE APT & INSTALL DEPENDENCIES (including dnsutils) ----
+c_cyan "==> Updating apt and installing bootstrap dependencies"
+apt-get update -y
+DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip git curl wget ca-certificates dnsutils
+
+# ---- 3. CLEAR GIT PROXY ----
+c_cyan "==> Removing any stuck Git proxy settings..."
+git config --global --unset http.proxy 2>/dev/null || true
+git config --global --unset https.proxy 2>/dev/null || true
+
+# ---- 4. FLUSH DNS CACHE ----
 if command -v systemd-resolve &>/dev/null; then
     c_cyan "Flushing DNS cache..."
     systemd-resolve --flush-caches 2>/dev/null || true
 fi
 
-# ---- 2. TEST DNS BEFORE DOING ANYTHING ----
+# ---- 5. TEST DNS RESOLUTION ----
 c_cyan "==> Testing DNS resolution..."
 max_retries=5
 attempt=0
@@ -55,17 +65,7 @@ if [[ $dns_ok -eq 0 ]]; then
 fi
 c_green "DNS is working."
 
-# ---- 3. UPDATE APT & INSTALL DEPENDENCIES ----
-c_cyan "==> Updating apt and installing bootstrap dependencies"
-apt-get update -y
-DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip git curl wget ca-certificates dnsutils
-
-# ---- 4. CLEAR GIT PROXY ----
-c_cyan "==> Removing any stuck Git proxy settings..."
-git config --global --unset http.proxy 2>/dev/null || true
-git config --global --unset https.proxy 2>/dev/null || true
-
-# ---- 5. CLONE FRESH WITH RETRIES ----
+# ---- 6. CLONE FRESH WITH RETRIES ----
 c_cyan "==> Cloning sshauto into ${APP_ROOT}"
 rm -rf "${APP_ROOT}"
 
@@ -83,7 +83,6 @@ while [[ $attempt -lt $max_retries ]]; do
     fi
     c_red "Clone attempt $attempt failed. Retrying in ${retry_delay}s..."
     sleep "${retry_delay}"
-    # flush DNS again before retry
     systemd-resolve --flush-caches 2>/dev/null || true
 done
 
@@ -97,7 +96,7 @@ fi
 
 c_green "Clone successful."
 
-# ---- 6. SETUP PERMISSIONS & DEPENDENCIES ----
+# ---- 7. SETUP PERMISSIONS & DEPENDENCIES ----
 chmod +x "${APP_ROOT}/main.py"
 if [[ -d "${APP_ROOT}/scripts" ]]; then
     chmod +x "${APP_ROOT}/scripts/"*.py 2>/dev/null || true
@@ -110,7 +109,7 @@ else
     c_red "Warning: requirements.txt not found in ${APP_ROOT}"
 fi
 
-# ---- 7. RUN INSTALLER ----
+# ---- 8. RUN INSTALLER ----
 c_cyan "==> Running the automated installer (--force to rewrite all configs)"
 python3 "${APP_ROOT}/main.py" install --force
 
