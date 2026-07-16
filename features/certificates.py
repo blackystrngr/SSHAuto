@@ -1,6 +1,7 @@
 """
-Automated Cloudflare Origin Certificate generation with self‑signed fallback.
-Always prompts for domain, email, and API key (if Cloudflare is chosen).
+Cloudflare Origin Certificate (interactive) or automatic self‑signed.
+During full install: auto‑generates self‑signed if no cert exists.
+During `sshauto cert`: prompts for Cloudflare details.
 """
 from __future__ import annotations
 
@@ -23,14 +24,12 @@ class CloudflareStrategy:
 
     def issue(self) -> tuple[str, str]:
         log.info(f"Requesting Cloudflare Origin Certificate for {self.domain}")
-
         headers = {
             "X-Auth-Email": self.email,
             "X-Auth-Key": self.api_key,
             "Content-Type": "application/json",
         }
 
-        # 1. Get zone ID
         zones_url = "https://api.cloudflare.com/client/v4/zones"
         params = {"name": self.domain}
         resp = requests.get(zones_url, headers=headers, params=params, timeout=30)
@@ -38,10 +37,9 @@ class CloudflareStrategy:
             raise CertificateError(f"Cloudflare API error: {resp.text}")
         data = resp.json()
         if not data.get("success") or not data.get("result"):
-            raise CertificateError(f"Domain '{self.domain}' not found in Cloudflare account.")
+            raise CertificateError(f"Domain '{self.domain}' not found.")
         zone_id = data["result"][0]["id"]
 
-        # 2. Request origin certificate (15 years)
         cert_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/origin_certificates"
         payload = {
             "hostnames": [self.domain],
@@ -55,7 +53,6 @@ class CloudflareStrategy:
         if not cert_data.get("success"):
             raise CertificateError(f"Origin cert error: {cert_data.get('errors')}")
 
-        # 3. Save certificate and key
         out_dir = SSHAUTO_CERT_DIR / self.domain
         out_dir.mkdir(parents=True, exist_ok=True)
         cert_path = out_dir / "fullchain.pem"
@@ -64,7 +61,7 @@ class CloudflareStrategy:
         key_path.write_text(cert_data["result"]["private_key"])
         log.success("Cloudflare Origin Certificate saved.")
 
-        # Store in Let's Encrypt style path for compatibility
+        # Also copy to Let's Encrypt style path
         le_dir = LETSENCRYPT_LIVE / self.domain
         le_dir.mkdir(parents=True, exist_ok=True)
         (le_dir / "fullchain.pem").write_text(cert_data["result"]["certificate"])
@@ -79,7 +76,7 @@ class SelfSignedStrategy:
         out_dir.mkdir(parents=True, exist_ok=True)
         cert_path = out_dir / "fullchain.pem"
         key_path = out_dir / "privkey.pem"
-        log.info(f"Generating self‑signed fallback cert for {domain}")
+        log.info(f"Generating self‑signed cert for {domain}")
         Shell.run(
             "openssl req -x509 -nodes -days 825 -newkey rsa:2048 "
             f"-keyout {key_path} -out {cert_path} -subj '/CN={domain}'"
@@ -101,21 +98,59 @@ class CertificatesFeature(BaseFeature):
 
     def install(self) -> None:
         data = state.ensure_defaults()
+        domain = data.get("cert_domain")
 
-        # Always ask for the domain (even if already set)
+        # ---- If called from full install (non‑interactive) ----
+        # If domain is missing or cert files don't exist, generate self‑signed.
+        if not domain or not self._cert_files_exist(data):
+            log.info("No valid certificate found. Generating self‑signed automatically.")
+            if not domain:
+                domain = input("Enter your domain name: ").strip()
+                if not domain:
+                    raise CertificateError("Domain cannot be empty.")
+                state.set("cert_domain", domain)
+                data["cert_domain"] = domain
+            strategy = SelfSignedStrategy()
+            cert_path, key_path = strategy.issue(domain)
+            data.update({
+                "cert_fullchain_path": cert_path,
+                "cert_key_path": key_path,
+                "cert_issued_at": datetime.datetime.now(datetime.UTC).isoformat(),
+                "cert_strategy": "selfsigned",
+            })
+            state.save(data)
+            from features.nginx_relay import NginxRelayFeature
+            NginxRelayFeature().regenerate()
+            log.success("Self‑signed certificate ready.")
+            return
+
+        # ---- If called via `sshauto cert` (interactive) ----
+        self._interactive_install(data)
+
+    def _interactive_install(self, data: dict) -> None:
+        """Interactive Cloudflare certificate wizard."""
         print()
         log.rule("Certificate Configuration")
-        domain = input("Enter your domain name (e.g., hi.blackstrngr.qzz.io): ").strip()
-        if not domain:
-            raise CertificateError("Domain cannot be empty.")
-        state.set("cert_domain", domain)
-        data["cert_domain"] = domain
+        domain = data.get("cert_domain")
+        if domain:
+            print(f"Current domain: {domain}")
+            change = input("Change domain? [y/N]: ").strip().lower()
+            if change in ("y", "yes"):
+                domain = input("New domain: ").strip()
+                if not domain:
+                    raise CertificateError("Domain cannot be empty.")
+                state.set("cert_domain", domain)
+                data["cert_domain"] = domain
+        else:
+            domain = input("Enter your domain name: ").strip()
+            if not domain:
+                raise CertificateError("Domain cannot be empty.")
+            state.set("cert_domain", domain)
+            data["cert_domain"] = domain
 
-        # Ask for Cloudflare or self‑signed
         print()
         log.important("Cloudflare Origin Certificate (15‑year validity) is recommended.")
         use_cf = input("Do you want to use Cloudflare? [Y/n]: ").strip().lower()
-        cert_path = key_path = None
 
         if use_cf in ("y", "yes", ""):
             email = input("Cloudflare Account Email: ").strip()
@@ -131,31 +166,41 @@ class CertificatesFeature(BaseFeature):
                     strategy = CloudflareStrategy(email, api_key, domain)
                     try:
                         cert_path, key_path = strategy.issue()
+                        data.update({
+                            "cert_fullchain_path": cert_path,
+                            "cert_key_path": key_path,
+                            "cert_issued_at": datetime.datetime.now(datetime.UTC).isoformat(),
+                            "cert_strategy": "cloudflare",
+                        })
+                        state.save(data)
+                        from features.nginx_relay import NginxRelayFeature
+                        NginxRelayFeature().regenerate()
+                        log.success("Certificate ready and applied to nginx.")
+                        return
                     except Exception as e:
-                        log.error(f"Cloudflare certificate failed: {e}")
+                        log.error(f"Cloudflare failed: {e}")
                         log.warning("Falling back to self‑signed.")
                         use_cf = "n"
 
-        if use_cf not in ("y", "yes", "") or cert_path is None:
+        if use_cf not in ("y", "yes", ""):
             log.info("Using self‑signed certificate.")
             strategy = SelfSignedStrategy()
             cert_path, key_path = strategy.issue(domain)
+            data.update({
+                "cert_fullchain_path": cert_path,
+                "cert_key_path": key_path,
+                "cert_issued_at": datetime.datetime.now(datetime.UTC).isoformat(),
+                "cert_strategy": "selfsigned",
+            })
+            state.save(data)
+            from features.nginx_relay import NginxRelayFeature
+            NginxRelayFeature().regenerate()
+            log.success("Self‑signed certificate ready.")
 
-        data.update({
-            "cert_domain": domain,
-            "cert_fullchain_path": cert_path,
-            "cert_key_path": key_path,
-            "cert_issued_at": datetime.datetime.now(datetime.UTC).isoformat(),
-            "cert_strategy": "cloudflare" if use_cf in ("y", "yes", "") else "selfsigned",
-        })
-        state.save(data)
-
-        # Trigger nginx regeneration
-        from features.nginx_relay import NginxRelayFeature
-        NginxRelayFeature().regenerate()
-
-        log.success("Certificate ready and applied to nginx.")
+    def _cert_files_exist(self, data: dict) -> bool:
+        cert = data.get("cert_fullchain_path")
+        key = data.get("cert_key_path")
+        return bool(cert and key and Path(cert).exists() and Path(key).exists())
 
     def remove(self) -> None:
         log.warning("Certificate removal is manual – delete files from /etc/letsencrypt/live and /var/lib/sshauto/certs if needed.")
-        pass
