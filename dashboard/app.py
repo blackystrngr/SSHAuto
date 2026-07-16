@@ -102,6 +102,7 @@ class Dashboard:
             ui.kv_row("Expires", user.expires)
             print()
             log.important("Use these credentials in your SSH client (WebSocket mode).")
+            log.important("Ensure you connect to the WebSocket port (e.g., 80) and not port 22.")
         except Exception as e:
             log.error(f"Failed to create user: {e}")
         ui.pause()
