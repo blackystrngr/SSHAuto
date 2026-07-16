@@ -1,5 +1,5 @@
 """
-ICMP Tunneling – pingtunnel 2.8, architecture‑aware.
+ICMP Tunneling – pingtunnel (optional).
 """
 from __future__ import annotations
 
@@ -15,18 +15,18 @@ PINGTUNNEL_SERVICE = Path("/etc/systemd/system/pingtunnel.service")
 
 class IcmpTunnelFeature(BaseFeature):
     name = "icmp_tunnel"
-    description = "ICMP tunneling (pingtunnel 2.8)"
+    description = "ICMP tunneling (pingtunnel) – optional"
     depends_on = ["packages"]
 
     def is_installed(self) -> bool:
         return PINGTUNNEL_BIN.exists() and PINGTUNNEL_SERVICE.exists()
 
     def install(self) -> None:
-        log.info("Installing pingtunnel ICMP tunnel...")
+        log.info("Installing pingtunnel...")
 
         data = state.ensure_defaults()
         key = data.get("icmp_tunnel_key", 123456)
-        server_ip = data.get("server_ip", "your_vps_ip")
+        server_ip = data.get("server_ip", "your_server_ip")
 
         # 1. Disable kernel ICMP replies
         log.info("Disabling kernel ICMP echo replies...")
@@ -81,10 +81,10 @@ WantedBy=multi-user.target
         if status.ok and "active" in status.stdout:
             log.success("Pingtunnel installed and running.")
         else:
-            log.warning("Pingtunnel may not be active. Check 'systemctl status pingtunnel'")
+            log.warning("Pingtunnel may not be active.")
 
         log.important("Client config:")
-        log.important(f"  Server IP: {server_ip} (ICMP protocol)")
+        log.important(f"  Server IP: {server_ip} (ICMP)")
         log.important(f"  Key: {key} (numeric)")
 
     def remove(self) -> None:
