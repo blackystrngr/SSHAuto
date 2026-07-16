@@ -17,11 +17,14 @@ class DropbearServiceFeature(BaseFeature):
         port = data.get("dropbear_port", DROPBEAR_PORT_DEFAULT)
 
         DROPBEAR_BANNER_PATH.write_text("Authorized Tunnel Access Only.\n")
+        # Performance tweaks:
+        # -W 1048576: larger SSH channel window (bandwidth-delay product)
+        # -K 15 -I 0: keepalive every 15s, no idle timeout
         config = f"""NO_START=0
 DROPBEAR_PORT={port}
-DROPBEAR_EXTRA_ARGS="-p 127.0.0.1:{port} -b {DROPBEAR_BANNER_PATH} -W 65536"
+DROPBEAR_EXTRA_ARGS="-p 127.0.0.1:{port} -b {DROPBEAR_BANNER_PATH} -W 1048576 -K 15 -I 0"
 DROPBEAR_BANNER="{DROPBEAR_BANNER_PATH}"
-DROPBEAR_RECEIVE_WINDOW=65536
+DROPBEAR_RECEIVE_WINDOW=1048576
 """
         DROPBEAR_DEFAULTS_FILE.write_text(config)
         log.info(f"Dropbear defaults written (port {port})")
@@ -34,10 +37,11 @@ Description=Dropbear SSH Tunnel Backend
 After=network.target
 
 [Service]
-ExecStart=/usr/sbin/dropbear -F -p 127.0.0.1:{port} -W 65536 -b {DROPBEAR_BANNER_PATH}
+ExecStart=/usr/sbin/dropbear -F -p 127.0.0.1:{port} -W 1048576 -K 15 -I 0 -b {DROPBEAR_BANNER_PATH}
 Restart=always
 RestartSec=3
 User=root
+LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target
