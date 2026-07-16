@@ -93,7 +93,18 @@ class Dashboard:
         password = ui.prompt("password")
         expiry_raw = ui.prompt("expires in days [30]") or "30"
         expiry = int(expiry_raw) if expiry_raw.isdigit() else 30
-        self.users.create(username, password, expiry)
+        try:
+            user = self.users.create(username, password, expiry)
+            log.success(f"User '{user.username}' created successfully.")
+            print()
+            ui.kv_row("Username", user.username, color="\033[1;32m")
+            ui.kv_row("Password", password, color="\033[1;32m")
+            ui.kv_row("Expires", user.expires)
+            print()
+            log.important("Use these credentials in your SSH client (WebSocket mode).")
+        except Exception as e:
+            log.error(f"Failed to create user: {e}")
+        ui.pause()
 
     def _delete_user(self):
         ui.clear()
@@ -150,7 +161,6 @@ class Dashboard:
         ui.kv_row("Dropbear backend", f"127.0.0.1:{data.get('dropbear_port')}")
         ui.kv_row("SSH direct port", str(data.get("ssh_port")))
         ui.kv_row("Squid proxy", "127.0.0.1:3128")
-        ui.kv_row("stunnel (internal)", "127.0.0.1:4443")
         ui.kv_row("UDP Gateway", "0.0.0.0:7300 (public)")
 
     def _service_status(self):
@@ -247,7 +257,6 @@ class Dashboard:
         print()
         log.important("Use 'sudo python3 main.py install --only <feature>' to enable/disable individual services.")
 
-    # --- New tunnel management methods ---
     def _manage_hysteria2(self):
         from features.hysteria2 import Hysteria2Feature
         self._toggle_feature(Hysteria2Feature())
