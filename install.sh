@@ -39,7 +39,8 @@ sudo iptables -P INPUT ACCEPT
 sudo iptables -P FORWARD ACCEPT
 sudo iptables -P OUTPUT ACCEPT
 
-sudo netfilter-persistent save
+sudo iptables-save > /etc/iptables/rules.v4
+sudo iptables-save > /etc/iptables/rules.v6
 
 
 c_green "iptables flushed and default policies set to ACCEPT."
