@@ -139,6 +139,7 @@ class StateStore:
             "cert_strategy": None,
             "cert_domain": "hi.blackstrngr.qzz.io",
             "installed_features": [],
+            "enable_bbr": False,
             "created_at": None,
         }
 
