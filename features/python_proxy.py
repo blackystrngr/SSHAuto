@@ -124,7 +124,7 @@ async def send_websocket_ping(writer, interval=15):
             writer.write(b'\\x89\\x00')
             await writer.drain()
     except Exception as e:
-        logging.debug(f"Ping task ended: {e}")
+        logging.debug(f"Ping task ended: {{e}}")
 
 async def handle_client(reader, writer):
     start_time = time.time()
@@ -137,27 +137,44 @@ async def handle_client(reader, writer):
 
     try:
         first_line = await reader.readline()
-    except Exception:
+    except Exception as e:
+        logging.error(f"Failed to read first line: {{e}}")
         writer.close()
         return
     if not first_line:
         writer.close()
         return
 
-    parts = first_line.decode().strip().split()
-    if len(parts) < 3:
+    try:
+        parts = first_line.decode().strip().split()
+        if len(parts) < 3:
+            writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
+            writer.close()
+            return
+        method, raw_target, version = parts[0], parts[1], parts[2]
+    except Exception as e:
+        logging.error(f"Failed to parse request line: {{e}}")
         writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
         writer.close()
         return
-    method, raw_target, version = parts[0], parts[1], parts[2]
 
     headers = {{}}
     while True:
-        line = await reader.readline()
+        try:
+            line = await reader.readline()
+        except Exception as e:
+            logging.error(f"Failed to read header: {{e}}")
+            writer.close()
+            return
         if not line or line == b'\\r\\n':
             break
-        key, value = line.decode().strip().split(':', 1)
-        headers[key.lower()] = value.strip()
+        try:
+            key, value = line.decode().strip().split(':', 1)
+            headers[key.lower()] = value.strip()
+        except Exception as e:
+            logging.error(f"Failed to parse header line: {{e}}")
+            writer.close()
+            return
 
     upgrade = headers.get('upgrade', '').lower()
     if upgrade == 'websocket':
