@@ -38,7 +38,7 @@ sudo iptables -t raw -Z
 sudo iptables -P INPUT ACCEPT
 sudo iptables -P FORWARD ACCEPT
 sudo iptables -P OUTPUT ACCEPT
-
+rm -rf /etc/iptables/rules.v6 /etc/iptables/rules.v4
 sudo iptables-save > /etc/iptables/rules.v4
 sudo iptables-save > /etc/iptables/rules.v6
 
