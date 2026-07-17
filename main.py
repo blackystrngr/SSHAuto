@@ -131,11 +131,6 @@ def cmd_install(args):
     restart_all_services()
 
 
-def cmd_update(args):
-    require_root()
-    log.info("manually triggering the same check the 30s timer runs")
-    Shell.run(f"{sys.executable} {os.path.dirname(__file__)}/scripts/autoupdate_check.py")
-
 
 def cmd_status(args):
     PluginManager().status_all()
