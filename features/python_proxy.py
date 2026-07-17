@@ -115,17 +115,6 @@ async def relay(a_reader, a_writer, b_reader, b_writer):
         except Exception:
             pass
 
-async def send_websocket_ping(writer, interval=15):
-    """Send WebSocket ping frames periodically to keep the connection alive."""
-    try:
-        while True:
-            await asyncio.sleep(interval)
-            # WebSocket ping frame: opcode 0x9 (FIN=1), mask=0, payload len=0
-            writer.write(b'\\x89\\x00')
-            await writer.drain()
-    except Exception as e:
-        logging.debug(f"Ping task ended: {{e}}")
-
 async def handle_client(reader, writer):
     start_time = time.time()
     peername = writer.get_extra_info('peername')
@@ -137,44 +126,27 @@ async def handle_client(reader, writer):
 
     try:
         first_line = await reader.readline()
-    except Exception as e:
-        logging.error(f"Failed to read first line: {{e}}")
+    except Exception:
         writer.close()
         return
     if not first_line:
         writer.close()
         return
 
-    try:
-        parts = first_line.decode().strip().split()
-        if len(parts) < 3:
-            writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
-            writer.close()
-            return
-        method, raw_target, version = parts[0], parts[1], parts[2]
-    except Exception as e:
-        logging.error(f"Failed to parse request line: {{e}}")
+    parts = first_line.decode().strip().split()
+    if len(parts) < 3:
         writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
         writer.close()
         return
+    method, raw_target, version = parts[0], parts[1], parts[2]
 
     headers = {{}}
     while True:
-        try:
-            line = await reader.readline()
-        except Exception as e:
-            logging.error(f"Failed to read header: {{e}}")
-            writer.close()
-            return
+        line = await reader.readline()
         if not line or line == b'\\r\\n':
             break
-        try:
-            key, value = line.decode().strip().split(':', 1)
-            headers[key.lower()] = value.strip()
-        except Exception as e:
-            logging.error(f"Failed to parse header line: {{e}}")
-            writer.close()
-            return
+        key, value = line.decode().strip().split(':', 1)
+        headers[key.lower()] = value.strip()
 
     upgrade = headers.get('upgrade', '').lower()
     if upgrade == 'websocket':
@@ -231,17 +203,12 @@ async def handle_connect(reader, writer, host, port):
         ssh_writer.close()
 
 async def handle_websocket(reader, writer):
-    # Send 101 Switching Protocols
     writer.write(b'HTTP/1.1 101 Switching Protocols\\r\\n')
     writer.write(b'Upgrade: websocket\\r\\n')
     writer.write(b'Connection: Upgrade\\r\\n')
     writer.write(b'\\r\\n')
     await writer.drain()
 
-    # Start ping task to keep the WebSocket alive
-    ping_task = asyncio.create_task(send_websocket_ping(writer, interval=15))
-
-    # Connect to Dropbear
     ssh_reader = ssh_writer = None
     for attempt in range(3):
         try:
@@ -256,7 +223,6 @@ async def handle_websocket(reader, writer):
                 await asyncio.sleep(0.5)
     if not ssh_reader:
         logging.error("Could not connect to Dropbear after 3 attempts")
-        ping_task.cancel()
         writer.close()
         return
 
@@ -270,7 +236,6 @@ async def handle_websocket(reader, writer):
     except Exception as e:
         logging.error(f"WebSocket tunnel error: {{e}}")
     finally:
-        ping_task.cancel()
         writer.close()
         ssh_writer.close()
 
@@ -342,7 +307,7 @@ WantedBy=multi-user.target
             log.error(f"Proxy is not active: {status.stdout}")
             raise Exception("Proxy not active")
 
-        log.success(f"Proxy installed on port {proxy_port} (perf‑tuned, WebSocket ping keepalive)")
+        log.success(f"Proxy installed on port {proxy_port} (perf‑tuned)")
 
     def remove(self) -> None:
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
