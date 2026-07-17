@@ -23,17 +23,6 @@ fi
 # ---- 1. FULL IPTABLES FLUSH ----
 c_cyan "==> Flushing all iptables rules (filter, nat, mangle, raw)..."
 iptables -F
-iptables -t nat -F
-iptables -t mangle -F
-iptables -t raw -F
-iptables -X
-iptables -t nat -X
-iptables -t mangle -X
-iptables -t raw -X
-iptables -Z
-iptables -t nat -Z
-iptables -t mangle -Z
-iptables -t raw -Z
 sudo iptables-save > /etc/iptables/rules.v4
 
 c_green "iptables flushed and default policies set to ACCEPT."
