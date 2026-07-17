@@ -185,9 +185,6 @@ def build_parser() -> argparse.ArgumentParser:
                            help="force reinstall – overwrite all configurations")
     p_install.set_defaults(func=cmd_install)
 
-    p_update = sub.add_parser("update", help="manually trigger a git-update check")
-    p_update.set_defaults(func=cmd_update)
-
     p_status = sub.add_parser("status", help="show install status of every feature")
     p_status.set_defaults(func=cmd_status)
 
