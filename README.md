@@ -13,18 +13,17 @@ of any new commit to this repo.
 > providers' terms of service and local law.
 
 ## Architecture
+Client ──TLS/HTTP──▶ CDN edge ──▶ nginx (this VPS, listens on ALL of
+HTTP_PORTS + HTTPS_PORTS, any IP)
+│
+│ websocket-upgrade request,
+│ proxy_buffering off, raw bytes
+▼
+dropbear on 127.0.0.1:<port>
+(never exposed publicly — the whole
+point of fronting it through nginx)
 
-```
-Client ──TLS/HTTP──▶  CDN edge  ──▶  nginx (this VPS, listens on ALL of
-                                      HTTP_PORTS + HTTPS_PORTS, any IP)
-                                          │
-                                          │ websocket-upgrade request,
-                                          │ proxy_buffering off, raw bytes
-                                          ▼
-                                  dropbear on 127.0.0.1:<port>
-                                  (never exposed publicly — the whole
-                                   point of fronting it through nginx)
-```
+text
 
 - **nginx** is the relay. It doesn't care what domain/SNI the client
   used (`server_name _;` catch-all) — any request with
@@ -52,59 +51,51 @@ Client ──TLS/HTTP──▶  CDN edge  ──▶  nginx (this VPS, listens on
   certs is never done automatically).
 
 ## Project layout
-
-```
-main.py                    CLI entry point (install/update/status/cert/dashboard)
-install.sh                 curl | bash bootstrap for a fresh VPS
+main.py CLI entry point (install/update/status/cert/dashboard)
+install.sh curl | bash bootstrap for a fresh VPS
 core/
-  config.py                 all constants + JSON state store (/etc/sshauto/state.json)
-  logger.py                  colored logger (INFO/SUCCESS/WARNING/IMPORTANT/ERROR/CRITICAL)
-  shell.py                    subprocess wrapper: retries, timeouts, dry-run, typed errors
-  exceptions.py                 exception hierarchy
-  plugin_manager.py              auto-discovers features/*.py, topological install order
+config.py all constants + JSON state store (/etc/sshauto/state.json)
+logger.py colored logger (INFO/SUCCESS/WARNING/IMPORTANT/ERROR/CRITICAL)
+shell.py subprocess wrapper: retries, timeouts, dry-run, typed errors
+exceptions.py exception hierarchy
+plugin_manager.py auto-discovers features/.py, topological install order
 features/
-  base.py                    BaseFeature contract every plugin implements
-  packages.py                 apt install required / purge apache*, ufw, firewalld
-  firewall.py                  iptables + full IPv6 block
-  ssh_service.py                 OpenSSH: port, random banner, hardening
-  dropbear_service.py             dropbear on 127.0.0.1 only
-  nginx_relay.py                   generates the HTTP+HTTPS relay config
-  certificates.py                   self-signed / ACME / Cloudflare strategies
-  fail2ban_service.py                jails for sshd + dropbear
-  autoupdate.py                       installs the 30s systemd timer
+base.py BaseFeature contract every plugin implements
+packages.py apt install required / purge apache, ufw, firewalld
+firewall.py iptables + full IPv6 block
+ssh_service.py OpenSSH: port, random banner, hardening
+dropbear_service.py dropbear on 127.0.0.1 only
+nginx_relay.py generates the HTTP+HTTPS relay config
+certificates.py self-signed / ACME / Cloudflare strategies
+fail2ban_service.py jails for sshd + dropbear
+autoupdate.py installs the 30s systemd timer
 dashboard/
-  app.py                      the `kk` menu loop
-  users.py                     create/list/delete tunnel accounts
-  ports.py                      add/remove custom relay ports (nginx+firewall together)
-  monitor.py                     live connections, user counts, throughput, speed test
-  ui.py                           dependency-free terminal rendering helpers
-templates/                  nginx + systemd unit templates (token-based, no Jinja needed)
+app.py the kk menu loop
+users.py create/list/delete tunnel accounts
+ports.py add/remove custom relay ports (nginx+firewall together)
+monitor.py live connections, user counts, throughput, speed test
+ui.py dependency-free terminal rendering helpers
+templates/ nginx + systemd unit templates (token-based, no Jinja needed)
 scripts/autoupdate_check.py the script the systemd timer runs every 30s
-data/banners.txt            pool of random SSH banners
-```
+data/banners.txt pool of random SSH banners
+
+text
 
 ## Install (on the target VPS, as root)
 
 ```bash
 bash <(curl -LS https://raw.githubusercontent.com/blackystrngr/sshauto/main/install.sh)
-```
-
 or, if you've already cloned it:
 
-```bash
+bash
 sudo python3 main.py install
-```
-
 At the end you'll be asked for a domain and a certificate strategy
 (skipped automatically if a valid cert is already on disk), then:
 
-```
+text
 Setup complete. Type 'kk' any time to open the dashboard.
-```
-
-## The `kk` dashboard
-
-```
+The kk dashboard
+text
 $ kk
   Active tunnels        3
   Total accounts        12
@@ -120,15 +111,12 @@ $ kk
   [8] Show active ports
   [9] Server status (services)
   [0] Exit
-```
-
-## Adding a new feature
-
-Drop a file in `features/`, subclass `BaseFeature`, done — no
-registration step, `PluginManager` finds it via `pkgutil` and slots it
+Adding a new feature
+Drop a file in features/, subclass BaseFeature, done — no
+registration step, PluginManager finds it via pkgutil and slots it
 into the dependency-ordered install sequence automatically:
 
-```python
+python
 # features/my_thing.py
 from features.base import BaseFeature
 
@@ -140,32 +128,29 @@ class MyThingFeature(BaseFeature):
     def is_installed(self) -> bool: ...
     def install(self) -> None: ...
     def remove(self) -> None: ...
-```
-
-## Other useful commands
-
-```bash
+Other useful commands
+bash
 sudo python3 main.py status        # per-feature install status
 sudo python3 main.py cert          # re-run the certificate wizard
 sudo python3 main.py update        # manually trigger what the 30s timer does
 sudo python3 main.py uninstall     # best-effort teardown
-```
+Notes / what's intentionally left for you to wire up
+install.sh's REPO_URL is a placeholder — point it at your actual
+git remote before using the one-line installer.
 
-## Notes / what's intentionally left for you to wire up
+AcmeStrategy uses certbot --standalone (briefly stops nginx during
+the HTTP-01 challenge). Swap to --webroot or a DNS-01 plugin if you
+need zero-downtime issuance.
 
-- `install.sh`'s `REPO_URL` is a placeholder — point it at your actual
-  git remote before using the one-line installer.
-- `AcmeStrategy` uses certbot `--standalone` (briefly stops nginx during
-  the HTTP-01 challenge). Swap to `--webroot` or a DNS-01 plugin if you
-  need zero-downtime issuance.
-- The Cloudflare strategy issues an **Origin CA** cert (15-year
-  validity, works with "Full (strict)" SSL mode) rather than going
-  through ACME's DNS-01 — simpler and it's what the Global API Key is
-  actually for.
-- This is the first build: every feature here is real, tested code (the
-  nginx relay was verified end-to-end against a live nginx + a fake
-  dropbear backend), but on a fresh VPS run `main.py status` after
-  install and skim `/var/log/sshauto/autoupdate.log` the first few times
-  to confirm your distro's paths match (`sshd` vs `ssh` service name,
-  `/var/log/auth.log` vs `/var/log/secure`, etc. — both are already
-  handled, but worth a glance).
+The Cloudflare strategy issues an Origin CA cert (15-year
+validity, works with "Full (strict)" SSL mode) rather than going
+through ACME's DNS-01 — simpler and it's what the Global API Key is
+actually for.
+
+This is the first build: every feature here is real, tested code (the
+nginx relay was verified end-to-end against a live nginx + a fake
+dropbear backend), but on a fresh VPS run main.py status after
+install and skim /var/log/sshauto/autoupdate.log the first few times
+to confirm your distro's paths match (sshd vs ssh service name,
+/var/log/auth.log vs /var/log/secure, etc. — both are already
+handled, but worth a glance).
