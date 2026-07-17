@@ -22,8 +22,25 @@ fi
 
 # ---- 1. FULL IPTABLES FLUSH ----
 c_cyan "==> Flushing all iptables rules (filter, nat, mangle, raw)..."
-iptables -F
-sudo iptables-save > /etc/iptables/rules.v4
+sudo iptables -F
+sudo iptables -t nat -F
+sudo iptables -t mangle -F
+sudo iptables -t raw -F
+sudo iptables -X
+sudo iptables -t nat -X
+sudo iptables -t mangle -X
+sudo iptables -t raw -X
+sudo iptables -Z
+sudo iptables -t nat -Z
+sudo iptables -t mangle -Z
+sudo iptables -t raw -Z
+
+sudo iptables -P INPUT ACCEPT
+sudo iptables -P FORWARD ACCEPT
+sudo iptables -P OUTPUT ACCEPT
+
+sudo netfilter-persistent save
+
 
 c_green "iptables flushed and default policies set to ACCEPT."
 
