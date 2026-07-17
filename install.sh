@@ -34,7 +34,7 @@ iptables -Z
 iptables -t nat -Z
 iptables -t mangle -Z
 iptables -t raw -Z
-
+sudo iptables-save > /etc/iptables/rules.v4
 
 c_green "iptables flushed and default policies set to ACCEPT."
 
