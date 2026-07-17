@@ -77,12 +77,17 @@ PROXY_PORT = {proxy_port}
 READ_CHUNK = 262144  # 256KB
 
 def tune_socket(sock):
-    """Apply every low‑latency socket option in one place."""
+    """Apply every low‑latency socket option and TCP keepalive in one place."""
     try:
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4194304)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4194304)
         sock.setsockopt(socket.IPPROTO_TCP, 12, 1)  # TCP_QUICKACK
+        # TCP keepalive – prevents NAT/firewall idle timeouts
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 15)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 3)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
     except Exception:
         pass
     try:
@@ -307,7 +312,7 @@ WantedBy=multi-user.target
             log.error(f"Proxy is not active: {status.stdout}")
             raise Exception("Proxy not active")
 
-        log.success(f"Proxy installed on port {proxy_port} (perf‑tuned)")
+        log.success(f"Proxy installed on port {proxy_port} (perf‑tuned, TCP keepalive)")
 
     def remove(self) -> None:
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
