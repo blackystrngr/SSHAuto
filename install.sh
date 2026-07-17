@@ -43,7 +43,7 @@ c_green "iptables flushed and default policies set to ACCEPT."
 # ---- 3. INSTALL DEPENDENCIES ----
 c_cyan "==> Updating apt and installing bootstrap dependencies"
 apt-get update -y
-DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip git curl wget ca-certificates
+apt-get install -y python3 python3-pip git curl wget ca-certificates
 
 # ---- 4. CLEAR GIT PROXY ----
 c_cyan "==> Removing any stuck Git proxy settings..."
