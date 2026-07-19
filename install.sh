@@ -24,16 +24,6 @@ fi
 c_cyan "==> Flushing all iptables rules (filter, nat, mangle, raw)..."
 
 rm -rf /etc/iptables/rules.v6 /etc/iptables/rules.v4 /usr/share/netfilter-persistent/plugins.d/15-ip4tables /usr/share/netfilter-persistent/plugins.d/25-ip6tables
-sudo iptables -F
-
-sudo iptables -P INPUT ACCEPT
-sudo iptables -P FORWARD ACCEPT
-sudo iptables -P OUTPUT ACCEPT
-
-sudo iptables-save > /etc/iptables/rules.v4
-sudo iptables-save > /etc/iptables/rules.v6
-apt install netfilter-persistent -y
-sudo netfilter-persistent save
 
 c_green "iptables flushed and default policies set to ACCEPT."
 
