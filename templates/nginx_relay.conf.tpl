@@ -1,6 +1,12 @@
 # ============================================================
-#  Managed by sshauto – WebSocket relay (stable configuration)
+#  Managed by sshauto – Ultra‑Fast WebSocket relay
 # ============================================================
+
+# Upstream with keepalive for connection reuse
+upstream websocket_backend {
+    server 127.0.0.1:@PROXY_PORT@;
+    keepalive 64;
+}
 
 map $http_upgrade $connection_upgrade {
     default upgrade;
@@ -11,13 +17,14 @@ server {
 @HTTP_LISTEN_BLOCK@
     server_name @DOMAIN@;
     tcp_nodelay on;
+    access_log off;
 
     client_header_timeout 86400s;
     client_body_timeout 86400s;
     client_max_body_size 0;
 
     location / {
-        proxy_pass http://127.0.0.1:@PROXY_PORT@;
+        proxy_pass http://websocket_backend;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
@@ -29,7 +36,7 @@ server {
         proxy_request_buffering off;
         proxy_read_timeout 86400s;
         proxy_send_timeout 86400s;
-        proxy_connect_timeout 30s;
+        proxy_connect_timeout 5s;   # fail fast
         tcp_nodelay on;
     }
 }
