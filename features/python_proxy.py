@@ -6,7 +6,7 @@ from pathlib import Path
 from features.base import BaseFeature
 from core.shell import Shell
 from core.logger import log
-from core.config import state, PROXY_PORT_DEFAULT, LOG_DIR
+from core.config import state, PROXY_PORT_DEFAULT, DROPBEAR_PORT_DEFAULT, LOG_DIR
 
 PROXY_BIN = Path("/usr/local/bin/ws_ssh_proxy.py")
 SERVICE_NAME = "ws-ssh-proxy.service"
@@ -42,7 +42,7 @@ class PythonProxyFeature(BaseFeature):
             proxy_port = new_port
             state.set("proxy_port", proxy_port)
 
-        dropbear_port = data.get("dropbear_port", 110)
+        dropbear_port = data.get("dropbear_port", DROPBEAR_PORT_DEFAULT)
 
         LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -71,7 +71,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     filename=str(LOG_DIR / "proxy.log"),
-    level=logging.INFO,
+    level=logging.WARNING,   # reduced to avoid disk I/O
     format='%(asctime)s %(levelname)s %(message)s'
 )
 logging.info(f"Proxy starting, uvloop: {{uvloop_used}}")
@@ -124,6 +124,10 @@ async def relay(a_reader, a_writer, b_reader, b_writer):
     _, pending = await asyncio.wait({{t1, t2}}, return_when=asyncio.FIRST_COMPLETED)
     for t in pending:
         t.cancel()
+    # Drain cancellations so they don't linger in the loop (avoids GC warnings
+    # and shaves a tiny bit of scheduler overhead under high connection churn)
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
     for w in (a_writer, b_writer):
         try:
             w.close()
@@ -279,7 +283,7 @@ if __name__ == '__main__':
         PROXY_BIN.write_text(proxy_code)
         PROXY_BIN.chmod(0o755)
 
-        # Systemd service – ultra‑high priority
+        # Systemd service – ultra‑high priority, safe for single‑vCPU
         service_content = f"""[Unit]
 Description=Unified Proxy (WebSocket + CONNECT)
 After=network.target dropbear-tunnel.service
@@ -291,11 +295,10 @@ ExecStart=/usr/bin/python3 {PROXY_BIN}
 Restart=always
 RestartSec=1
 User=root
-# Highest possible scheduling priority
-Nice=-20
+Nice=-10
 CPUSchedulingPolicy=rr
-CPUSchedulingPriority=99
-IOSchedulingClass=realtime
+CPUSchedulingPriority=50
+IOSchedulingClass=best-effort
 IOSchedulingPriority=0
 LimitNOFILE=1048576
 StandardOutput=append:/var/log/sshauto/proxy.log
