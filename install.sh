@@ -47,6 +47,11 @@ sudo iptables-save > /etc/iptables/rules.v6
 
 c_green "iptables flushed and default policies set to ACCEPT."
 
+
+# ---- 4. CLEAR GIT PROXY ----
+c_cyan "==> Removing any stuck Git proxy settings..."
+git config --global --unset http.proxy 2>/dev/null || true
+git config --global --unset https.proxy 2>/dev/null || true
 # ---- 2. FIX SYSTEMD-RESOLVED CONFIGURATION (DNS: 1.1.1.1, 1.0.0.1) ----
 
 # ---- 3. INSTALL DEPENDENCIES ----
@@ -54,10 +59,7 @@ c_cyan "==> Updating apt and installing bootstrap dependencies"
 apt-get update -y
 apt-get install -y python3 python3-pip git curl wget ca-certificates
 
-# ---- 4. CLEAR GIT PROXY ----
-c_cyan "==> Removing any stuck Git proxy settings..."
-git config --global --unset http.proxy 2>/dev/null || true
-git config --global --unset https.proxy 2>/dev/null || true
+
 
 # ---- 5. CLONE WITH RETRIES ----
 c_cyan "==> Cloning sshauto into ${APP_ROOT}"
