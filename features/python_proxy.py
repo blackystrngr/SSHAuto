@@ -74,49 +74,37 @@ logging.info(f"Proxy starting, uvloop: {{uvloop_used}}")
 
 DROPBEAR_PORT = {dropbear_port}
 PROXY_PORT = {proxy_port}
-READ_CHUNK = 262144  # 256KB
+READ_CHUNK = 16384  # 16KB – conservative, avoids buffer bloat
 
 def tune_socket(sock):
-    """Apply every low‑latency socket option and TCP keepalive in one place."""
+    """Apply only essential, proven socket options."""
     try:
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4194304)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4194304)
-        sock.setsockopt(socket.IPPROTO_TCP, 12, 1)  # TCP_QUICKACK
-        # TCP keepalive – prevents NAT/firewall idle timeouts
+        # Moderate buffers – enough for throughput without causing memory pressure
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
+        # TCP keepalive – gentle, prevents NAT timeouts
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 15)
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 3)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
     except Exception:
         pass
+
+async def pipe(src, dst, direction=""):
+    """Simple, reliable pipe – proven to work under load."""
     try:
-        # Busy‑poll: trades a little CPU for lower wake‑up latency
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BUSY_POLL, 50)
-    except Exception:
-        pass
-
-async def relay(a_reader, a_writer, b_reader, b_writer):
-    """Bidirectional pump, stops as soon as either side finishes."""
-    async def pump(src, dst):
+        while True:
+            data = await src.read(READ_CHUNK)
+            if not data:
+                break
+            dst.write(data)
+            await dst.drain()
+    except Exception as e:
+        logging.debug(f"pipe {{direction}} error: {{e}}")
+    finally:
         try:
-            while True:
-                data = await src.read(READ_CHUNK)
-                if not data:
-                    return
-                dst.write(data)
-                await dst.drain()
-        except Exception:
-            return
-
-    t1 = asyncio.ensure_future(pump(a_reader, b_writer))
-    t2 = asyncio.ensure_future(pump(b_reader, a_writer))
-    _, pending = await asyncio.wait({{t1, t2}}, return_when=asyncio.FIRST_COMPLETED)
-    for t in pending:
-        t.cancel()
-    for w in (a_writer, b_writer):
-        try:
-            w.close()
+            dst.close()
         except Exception:
             pass
 
@@ -183,7 +171,7 @@ async def handle_connect(reader, writer, host, port):
     try:
         ssh_reader, ssh_writer = await asyncio.wait_for(
             asyncio.open_connection(host, port),
-            timeout=5.0
+            timeout=10.0
         )
     except Exception as e:
         logging.error(f"CONNECT failed: {{e}}")
@@ -200,7 +188,10 @@ async def handle_connect(reader, writer, host, port):
         tune_socket(ssh_sock)
 
     try:
-        await relay(reader, writer, ssh_reader, ssh_writer)
+        await asyncio.gather(
+            pipe(reader, ssh_writer, "client->ssh"),
+            pipe(ssh_reader, writer, "ssh->client")
+        )
     except Exception as e:
         logging.error(f"CONNECT tunnel error: {{e}}")
     finally:
@@ -219,7 +210,7 @@ async def handle_websocket(reader, writer):
         try:
             ssh_reader, ssh_writer = await asyncio.wait_for(
                 asyncio.open_connection('127.0.0.1', DROPBEAR_PORT),
-                timeout=2.0
+                timeout=3.0
             )
             break
         except Exception as e:
@@ -237,7 +228,10 @@ async def handle_websocket(reader, writer):
 
     logging.info(f"WebSocket tunnel established")
     try:
-        await relay(reader, writer, ssh_reader, ssh_writer)
+        await asyncio.gather(
+            pipe(reader, ssh_writer, "client->ssh"),
+            pipe(ssh_reader, writer, "ssh->client")
+        )
     except Exception as e:
         logging.error(f"WebSocket tunnel error: {{e}}")
     finally:
@@ -247,17 +241,12 @@ async def handle_websocket(reader, writer):
 async def main():
     server = await asyncio.start_server(
         handle_client, '127.0.0.1', PROXY_PORT,
-        backlog=1024,
+        backlog=256,
         reuse_address=True,
     )
     for s in server.sockets:
         tune_socket(s)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            # TCP Fast Open on listening socket (queue length 256)
-            s.setsockopt(socket.IPPROTO_TCP, getattr(socket, "TCP_FASTOPEN", 23), 256)
-        except Exception:
-            pass
 
     logging.info(f"Proxy listening on 127.0.0.1:{{PROXY_PORT}} (uvloop: {{uvloop_used}})")
     async with server:
@@ -278,14 +267,8 @@ Wants=dropbear-tunnel.service
 Type=simple
 ExecStart=/usr/bin/python3 {PROXY_BIN}
 Restart=always
-RestartSec=2
+RestartSec=3
 User=root
-Nice=-20
-CPUSchedulingPolicy=rr
-CPUSchedulingPriority=99
-IOSchedulingClass=realtime
-IOSchedulingPriority=0
-LimitNOFILE=1048576
 StandardOutput=append:/var/log/sshauto/proxy.log
 StandardError=append:/var/log/sshauto/proxy.log
 
@@ -312,7 +295,7 @@ WantedBy=multi-user.target
             log.error(f"Proxy is not active: {status.stdout}")
             raise Exception("Proxy not active")
 
-        log.success(f"Proxy installed on port {proxy_port} (perf‑tuned, TCP keepalive)")
+        log.success(f"Proxy installed on port {proxy_port} (stable, conservative tuning)")
 
     def remove(self) -> None:
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
