@@ -45,6 +45,8 @@ class PythonProxyFeature(BaseFeature):
         dropbear_port = data.get("dropbear_port", 110)
 
         LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Force install uvloop – mandatory for performance
         Shell.run("pip3 install uvloop --break-system-packages", check=False, timeout=30)
 
         proxy_code = f'''#!/usr/bin/env python3
@@ -55,15 +57,17 @@ import time
 import sys
 from pathlib import Path
 
-LOG_DIR = Path("/var/log/sshauto")
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-
+# --- FORCE uvloop (fastest event loop) ---
 try:
     import uvloop
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     uvloop_used = True
 except ImportError:
     uvloop_used = False
+    logging.warning("uvloop not installed – falling back to asyncio")
+
+LOG_DIR = Path("/var/log/sshauto")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     filename=str(LOG_DIR / "proxy.log"),
@@ -74,37 +78,55 @@ logging.info(f"Proxy starting, uvloop: {{uvloop_used}}")
 
 DROPBEAR_PORT = {dropbear_port}
 PROXY_PORT = {proxy_port}
-READ_CHUNK = 16384  # 16KB – conservative, avoids buffer bloat
+READ_CHUNK = 262144  # 256KB – reduces syscalls
 
 def tune_socket(sock):
-    """Apply only essential, proven socket options."""
+    """Apply the most aggressive low‑latency socket options."""
     try:
+        # 1. Disable Nagle – send immediately
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        # Moderate buffers – enough for throughput without causing memory pressure
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
-        # TCP keepalive – gentle, prevents NAT timeouts
+        # 2. Enable quick ACKs
+        sock.setsockopt(socket.IPPROTO_TCP, 12, 1)  # TCP_QUICKACK
+        # 3. Huge buffers – prevent backpressure
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4194304)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4194304)
+        # 4. Aggressive keepalive – keep NAT alive
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 15)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+        # 5. Busy‑poll – reduces wake‑up latency (if kernel supports)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BUSY_POLL, 50)
+        except Exception:
+            pass
     except Exception:
         pass
 
-async def pipe(src, dst, direction=""):
-    """Simple, reliable pipe – proven to work under load."""
-    try:
-        while True:
-            data = await src.read(READ_CHUNK)
-            if not data:
-                break
-            dst.write(data)
-            await dst.drain()
-    except Exception as e:
-        logging.debug(f"pipe {{direction}} error: {{e}}")
-    finally:
+async def relay(a_reader, a_writer, b_reader, b_writer):
+    """
+    Bidirectional pump – tears down instantly when one side finishes.
+    Uses FIRST_COMPLETED instead of waiting for both, cutting latency.
+    """
+    async def pump(src, dst):
         try:
-            dst.close()
+            while True:
+                data = await src.read(READ_CHUNK)
+                if not data:
+                    return
+                dst.write(data)
+                await dst.drain()
+        except Exception:
+            return
+
+    t1 = asyncio.ensure_future(pump(a_reader, b_writer))
+    t2 = asyncio.ensure_future(pump(b_reader, a_writer))
+    _, pending = await asyncio.wait({{t1, t2}}, return_when=asyncio.FIRST_COMPLETED)
+    for t in pending:
+        t.cancel()
+    for w in (a_writer, b_writer):
+        try:
+            w.close()
         except Exception:
             pass
 
@@ -171,7 +193,7 @@ async def handle_connect(reader, writer, host, port):
     try:
         ssh_reader, ssh_writer = await asyncio.wait_for(
             asyncio.open_connection(host, port),
-            timeout=10.0
+            timeout=5.0
         )
     except Exception as e:
         logging.error(f"CONNECT failed: {{e}}")
@@ -188,10 +210,7 @@ async def handle_connect(reader, writer, host, port):
         tune_socket(ssh_sock)
 
     try:
-        await asyncio.gather(
-            pipe(reader, ssh_writer, "client->ssh"),
-            pipe(ssh_reader, writer, "ssh->client")
-        )
+        await relay(reader, writer, ssh_reader, ssh_writer)
     except Exception as e:
         logging.error(f"CONNECT tunnel error: {{e}}")
     finally:
@@ -210,7 +229,7 @@ async def handle_websocket(reader, writer):
         try:
             ssh_reader, ssh_writer = await asyncio.wait_for(
                 asyncio.open_connection('127.0.0.1', DROPBEAR_PORT),
-                timeout=3.0
+                timeout=2.0
             )
             break
         except Exception as e:
@@ -228,10 +247,7 @@ async def handle_websocket(reader, writer):
 
     logging.info(f"WebSocket tunnel established")
     try:
-        await asyncio.gather(
-            pipe(reader, ssh_writer, "client->ssh"),
-            pipe(ssh_reader, writer, "ssh->client")
-        )
+        await relay(reader, writer, ssh_reader, ssh_writer)
     except Exception as e:
         logging.error(f"WebSocket tunnel error: {{e}}")
     finally:
@@ -241,12 +257,17 @@ async def handle_websocket(reader, writer):
 async def main():
     server = await asyncio.start_server(
         handle_client, '127.0.0.1', PROXY_PORT,
-        backlog=256,
+        backlog=1024,  # large queue for many concurrent connections
         reuse_address=True,
     )
     for s in server.sockets:
         tune_socket(s)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            # Enable TCP Fast Open on the listening socket (queue size 256)
+            s.setsockopt(socket.IPPROTO_TCP, getattr(socket, "TCP_FASTOPEN", 23), 256)
+        except Exception:
+            pass
 
     logging.info(f"Proxy listening on 127.0.0.1:{{PROXY_PORT}} (uvloop: {{uvloop_used}})")
     async with server:
@@ -258,6 +279,7 @@ if __name__ == '__main__':
         PROXY_BIN.write_text(proxy_code)
         PROXY_BIN.chmod(0o755)
 
+        # Systemd service – ultra‑high priority
         service_content = f"""[Unit]
 Description=Unified Proxy (WebSocket + CONNECT)
 After=network.target dropbear-tunnel.service
@@ -267,8 +289,15 @@ Wants=dropbear-tunnel.service
 Type=simple
 ExecStart=/usr/bin/python3 {PROXY_BIN}
 Restart=always
-RestartSec=3
+RestartSec=1
 User=root
+# Highest possible scheduling priority
+Nice=-20
+CPUSchedulingPolicy=rr
+CPUSchedulingPriority=99
+IOSchedulingClass=realtime
+IOSchedulingPriority=0
+LimitNOFILE=1048576
 StandardOutput=append:/var/log/sshauto/proxy.log
 StandardError=append:/var/log/sshauto/proxy.log
 
@@ -295,7 +324,7 @@ WantedBy=multi-user.target
             log.error(f"Proxy is not active: {status.stdout}")
             raise Exception("Proxy not active")
 
-        log.success(f"Proxy installed on port {proxy_port} (stable, conservative tuning)")
+        log.success(f"Proxy installed on port {proxy_port} (ultra‑fast, uvloop, real‑time)")
 
     def remove(self) -> None:
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
