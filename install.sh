@@ -22,6 +22,8 @@ fi
 
 # ---- 1. FULL IPTABLES FLUSH ----
 c_cyan "==> Flushing all iptables rules (filter, nat, mangle, raw)..."
+
+rm -rf /etc/iptables/rules.v6 /etc/iptables/rules.v4
 sudo iptables -F
 sudo iptables -t nat -F
 sudo iptables -t mangle -F
@@ -38,7 +40,7 @@ sudo iptables -t raw -Z
 sudo iptables -P INPUT ACCEPT
 sudo iptables -P FORWARD ACCEPT
 sudo iptables -P OUTPUT ACCEPT
-rm -rf /etc/iptables/rules.v6 /etc/iptables/rules.v4
+
 sudo iptables-save > /etc/iptables/rules.v4
 sudo iptables-save > /etc/iptables/rules.v6
 
