@@ -15,7 +15,7 @@ NGINX_SITE_NAME = "sshauto-relay"
 
 class NginxRelayFeature(BaseFeature):
     name = "nginx_relay"
-    description = "Generate the nginx WebSocket relay (HTTP+HTTPS)"
+    description = "Generate the nginx WebSocket relay (HTTP+HTTPS) – ultra‑fast"
     depends_on = ["packages", "dropbear_service", "python_proxy", "certificates"]
 
     @property
@@ -92,7 +92,7 @@ class NginxRelayFeature(BaseFeature):
                 https_ports.remove(443)
                 log.debug("sslh detected – nginx will not listen on 443.")
 
-        # TCP Fast Open enabled on all listeners
+        # TCP Fast Open on all listeners
         http_listen = "\n".join(f"    listen 0.0.0.0:{p} fastopen=256;" for p in http_ports)
 
         https_block = ""
