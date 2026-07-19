@@ -42,7 +42,6 @@ CORE_FEATURES = [
     "fail2ban_service",
     "squid_proxy",
     "udpgw_service",
-    "network_optimizer",
 ]
 
 # Optional features (only installed via dashboard or --only)
