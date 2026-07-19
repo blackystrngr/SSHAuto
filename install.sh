@@ -32,6 +32,7 @@ sudo iptables -P OUTPUT ACCEPT
 
 sudo iptables-save > /etc/iptables/rules.v4
 sudo iptables-save > /etc/iptables/rules.v6
+apt install netfilter-persistent -y
 sudo netfilter-persistent save
 
 c_green "iptables flushed and default policies set to ACCEPT."
