@@ -51,6 +51,7 @@ class Dashboard:
             ("12", "Hysteria2 UDP/QUIC tunnel"),
             ("13", "DNS tunnel (iodine)"),
             ("14", "ICMP tunnel (pingtunnel)"),
+            ("15", "AdBlock DNS (ads/trackers/malware/miners)"),
             ("0", "Exit"),
         ])
 
@@ -70,6 +71,7 @@ class Dashboard:
             "12": self._manage_hysteria2,
             "13": self._manage_dns_tunnel,
             "14": self._manage_icmp_tunnel,
+            "15": self._manage_adblock,
         }
         action = actions.get(choice)
         if not action:
@@ -311,6 +313,10 @@ class Dashboard:
             return self.monitor.live_stats(sample_seconds=0.3)
         except Exception:
             return None
+
+    def _manage_adblock(self):
+        from dashboard.adblock import adblock_menu
+        adblock_menu()
 
 
 def main():
