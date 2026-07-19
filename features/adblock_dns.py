@@ -1,8 +1,8 @@
 """
 features/adblock_dns.py
 
-DNS-level ad / tracker / malware / cryptominer blocking for tunnel clients.
-Clients that route DNS through the tunnel get filtered by a local dnsmasq instance.
+DNS-level ad / tracker / malware / cryptominer blocking for ALL DNS on the VPS.
+dnsmasq listens on port 53, replaces systemd-resolved, and filters every query.
 """
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ import re
 from pathlib import Path
 import urllib.request
 
-from core.config import state
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
@@ -21,6 +20,8 @@ BLOCKLIST_FILE = STATE_DIR / "blocklist.hosts"
 WHITELIST_FILE = STATE_DIR / "whitelist.txt"
 DNSMASQ_CONF = Path("/etc/dnsmasq.d/sshauto-adblock.conf")
 STATS_FILE = STATE_DIR / "stats.json"
+RESOLV_CONF = Path("/etc/resolv.conf")
+RESOLV_CONF_BACKUP = Path("/etc/resolv.conf.sshauto.bak")
 
 BLOCKLIST_SOURCES = [
     "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
@@ -28,43 +29,65 @@ BLOCKLIST_SOURCES = [
     "https://raw.githubusercontent.com/hoshsadiq/adblock-nocoin-list/master/hosts.txt",
 ]
 
-DNSMASQ_LISTEN_PORT = 5353  # avoid systemd-resolved on 53
-
 
 class AdBlockDNSFeature(BaseFeature):
     name = "adblock_dns"
-    description = "DNS sinkhole for ads/trackers/malware/cryptominers (dnsmasq)"
+    description = "Server‑side DNS sinkhole for ads/trackers/malware/cryptominers"
     depends_on = ["packages"]
 
     def is_installed(self) -> bool:
         return DNSMASQ_CONF.exists() and BLOCKLIST_FILE.exists()
 
     def install(self) -> None:
-        log.info("Installing adblock_dns feature (dnsmasq)...")
+        log.info("Installing server‑side adblock DNS (dnsmasq on port 53)...")
 
+        # 1. Install dnsmasq
         Shell.run("apt-get install -y dnsmasq", check=True)
+
+        # 2. Stop and disable systemd-resolved (it uses port 53)
+        Shell.run("systemctl stop systemd-resolved", check=False)
+        Shell.run("systemctl disable systemd-resolved", check=False)
+
+        # 3. Backup existing resolv.conf and make it point to localhost
+        if RESOLV_CONF.exists() and not RESOLV_CONF_BACKUP.exists():
+            Shell.run(f"cp {RESOLV_CONF} {RESOLV_CONF_BACKUP}", check=False)
+        RESOLV_CONF.write_text("nameserver 127.0.0.1\n")
+
+        # 4. Create state directories
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         WHITELIST_FILE.touch(exist_ok=True)
 
+        # 5. Fetch blocklists and generate config
         self.refresh_blocklist()
         self._write_dnsmasq_conf()
-        Shell.run("systemctl enable --now dnsmasq", check=False)
+
+        # 6. Enable and start dnsmasq
+        Shell.run("systemctl enable dnsmasq", check=False)
         Shell.run("systemctl restart dnsmasq", check=False)
 
-        log.success("AdBlock DNS installed.")
-        log.important(
-            f"Point tunnel clients' remote DNS at this VPS on port {DNSMASQ_LISTEN_PORT} "
-            "to enable filtering (e.g. SOCKS proxy with 'proxy DNS' / remote DNS)."
-        )
+        log.success("Server‑side AdBlock DNS installed.")
+        log.important("All DNS queries on this VPS (including remote DNS from tunnel clients) are now filtered.")
+        log.important("To bypass filtering, add domains to whitelist via dashboard (option 15 -> 3).")
 
     def remove(self) -> None:
-        Shell.run("systemctl disable --now dnsmasq", check=False)
+        Shell.run("systemctl stop dnsmasq", check=False)
+        Shell.run("systemctl disable dnsmasq", check=False)
         DNSMASQ_CONF.unlink(missing_ok=True)
-        Shell.run("systemctl restart dnsmasq", check=False)
-        log.info("AdBlock DNS removed.")
+
+        # Restore systemd-resolved
+        Shell.run("systemctl enable systemd-resolved", check=False)
+        Shell.run("systemctl start systemd-resolved", check=False)
+
+        # Restore original resolv.conf
+        if RESOLV_CONF_BACKUP.exists():
+            Shell.run(f"mv {RESOLV_CONF_BACKUP} {RESOLV_CONF}", check=False)
+        else:
+            RESOLV_CONF.write_text("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+
+        log.info("AdBlock DNS removed – original resolver restored.")
 
     def refresh_blocklist(self) -> dict:
-        log.info("Refreshing adblock blocklists...")
+        log.info("Refreshing blocklists...")
         domains: set[str] = set()
         per_source_counts = {}
 
@@ -127,9 +150,9 @@ class AdBlockDNSFeature(BaseFeature):
     def _write_dnsmasq_conf(self) -> None:
         DNSMASQ_CONF.parent.mkdir(parents=True, exist_ok=True)
         DNSMASQ_CONF.write_text(
-            f"""# managed by sshauto adblock_dns feature -- do not edit by hand
+            f"""# managed by sshauto adblock_dns -- do not edit by hand
 listen-address=127.0.0.1
-port={DNSMASQ_LISTEN_PORT}
+port=53
 bind-interfaces
 addn-hosts={BLOCKLIST_FILE}
 cache-size=10000
