@@ -46,7 +46,6 @@ class Dashboard:
             ("7", "Remove custom port"),
             ("8", "Show active ports"),
             ("9", "Server status (services)"),
-            ("10", "Network Optimizer & BBR Menu"),
             ("11", "Extra Services (Squid, stunnel, sslh, UDPGW)"),
             ("12", "Hysteria2 UDP/QUIC tunnel"),
             ("13", "DNS tunnel (iodine)"),
@@ -66,7 +65,6 @@ class Dashboard:
             "7": lambda: self._remove_port(),
             "8": self._show_ports,
             "9": self._service_status,
-            "10": self._manage_network_optimizer,
             "11": self._extra_services_status,
             "12": self._manage_hysteria2,
             "13": self._manage_dns_tunnel,
@@ -171,71 +169,7 @@ class Dashboard:
         from core.plugin_manager import PluginManager
         PluginManager().status_all()
 
-    def _manage_network_optimizer(self):
-        try:
-            from features.network_optimizer import NetworkOptimizerFeature
-            optimizer = NetworkOptimizerFeature()
-        except ImportError:
-            log.error("NetworkOptimizerFeature module not found")
-            return
-
-        while True:
-            ui.clear()
-            ui.header("network acceleration hub", "optimize routing latency & bbr layers")
-
-            is_active = optimizer.is_installed()
-            data = state.load()
-            bbr_enabled = data.get("enable_bbr", True)
-
-            status_text = "ENABLED & OPTIMIZED" if is_active else "DISABLED (STOCK LINUX)"
-            status_color = "\033[1;32m" if is_active else "\033[1;31m"
-            ui.kv_row("Current Profile Status", f"{status_color}{status_text}\033[0m")
-            ui.kv_row("BBR Congestion Control", f"{'✅ ON' if bbr_enabled else '❌ OFF'}")
-
-            from core.shell import Shell
-            cc_res = Shell.run("sysctl net.ipv4.tcp_congestion_control", check=False)
-            ss_res = Shell.run("sysctl net.ipv4.tcp_slow_start_after_idle", check=False)
-            cc = cc_res.stdout.strip() if cc_res.ok else "Unknown"
-            ss = ss_res.stdout.strip() if ss_res.ok else "Unknown"
-            ui.kv_row("Kernel Alg", cc)
-            ui.kv_row("Slow Start Config", ss)
-            print()
-            ui.menu([
-                ("1", "Apply Extreme Low-Latency Profile + BBR (3x-ui Optimization)"),
-                ("2", "Remove Optimizations (Reset to OS Default)"),
-                ("3", f"Toggle BBR ({'ON' if bbr_enabled else 'OFF'})"),
-                ("0", "Back to Main Menu")
-            ])
-
-            action = ui.prompt("Select action")
-            if action == "0" or not action:
-                return
-            elif action == "1":
-                ui.clear()
-                ui.header("deploying acceleration parameters")
-                try:
-                    state.set("enable_bbr", True)
-                    optimizer.install()
-                    ui.prompt("\nExecution complete. Press Enter to continue...")
-                except Exception as e:
-                    log.error(f"Error during network tune: {e}")
-                    ui.prompt("\nPress Enter to continue...")
-            elif action == "2":
-                ui.clear()
-                ui.header("rolling back kernel overrides")
-                try:
-                    optimizer.remove()
-                    ui.prompt("\nRollback complete. Press Enter to continue...")
-                except Exception as e:
-                    log.error(f"Error during rollback: {e}")
-                    ui.prompt("\nPress Enter to continue...")
-            elif action == "3":
-                new_state = not bbr_enabled
-                state.set("enable_bbr", new_state)
-                log.info(f"BBR toggled to {'ON' if new_state else 'OFF'}. Reapplying optimizer...")
-                optimizer.install()
-                ui.prompt(f"\nBBR is now {'ENABLED' if new_state else 'DISABLED'}. Press Enter to continue...")
-
+    
     def _extra_services_status(self):
         ui.clear()
         ui.header("Extra Services Overview", "Squid, stunnel, sslh, UDPGW")
