@@ -1,7 +1,3 @@
-# ============================================================
-#  Managed by sshauto – WebSocket relay (HTTP+HTTPS)
-# ============================================================
-
 map $http_upgrade $connection_upgrade {
     default upgrade;
     ''      close;
@@ -11,6 +7,7 @@ server {
 @HTTP_LISTEN_BLOCK@
     server_name @DOMAIN@;
     tcp_nodelay on;
+    access_log off;
 
     client_header_timeout 86400s;
     client_body_timeout 86400s;
