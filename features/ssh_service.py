@@ -32,7 +32,7 @@ HARDENING_DIRECTIVES = {
 class SSHServiceFeature(BaseFeature):
     name = "ssh_service"
     description = "Configure OpenSSH: port, banner, hardening"
-    depends_on = ["packages"]
+    depends_on = ["packages"]   # <-- this dependency will be resolved once packages.py exists
 
     def is_installed(self) -> bool:
         return SSH_BANNER_PATH.exists() and "Banner" in SSHD_CONFIG.read_text()

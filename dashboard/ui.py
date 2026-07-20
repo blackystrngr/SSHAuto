@@ -1,7 +1,5 @@
 """
-Small, dependency-free terminal UI helpers for the dashboard. Deliberately
-not curses-based: curses fights with SSH clients that have odd $TERM
-values, and this dashboard just needs clean redraws, not a full TUI.
+Small, dependency-free terminal UI helpers for the dashboard.
 """
 from __future__ import annotations
 
@@ -29,7 +27,6 @@ def header(title: str, subtitle: str = ""):
 
 
 def menu(options: list[tuple[str, str]]) -> None:
-    """options: list of (key, label)"""
     for key, label in options:
         print(f"  \033[1;33m[{key}]\033[0m  {label}")
     print()

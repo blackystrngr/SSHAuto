@@ -1,22 +1,13 @@
 """
-Builds /etc/nginx/sites-available/sshauto-relay.conf from the two
-templates and symlinks it into sites-enabled. Regenerated any time ports
-change (dashboard add/remove-port) or the cert changes.
+Builds /etc/nginx/sites-available/sshauto-relay.conf and symlinks it.
+Removes any other site configs to avoid conflicts.
+Uses the Cloudflare certificate from state (must be generated first).
 """
-from __future__ import annotations
-
 from pathlib import Path
-
 from core.config import (
-    APP_ROOT,
-    DROPBEAR_PORT_DEFAULT,
-    PROXY_PORT_DEFAULT,
-    HTTP_PORTS,
-    HTTPS_PORTS,
-    NGINX_RELAY_NAME,
-    NGINX_SITES_AVAILABLE,
-    NGINX_SITES_ENABLED,
-    state,
+    APP_ROOT, PROXY_PORT_DEFAULT, HTTP_PORTS, HTTPS_PORTS,
+    NGINX_SITES_AVAILABLE, NGINX_SITES_ENABLED, state,
+    SSHAUTO_CERT_DIR
 )
 from core.exceptions import ConfigError
 from core.logger import log
@@ -24,20 +15,22 @@ from core.shell import Shell
 from features.base import BaseFeature
 
 TEMPLATES_DIR = APP_ROOT / "templates"
+NGINX_SITE_NAME = "sshauto-relay"
 
 
 class NginxRelayFeature(BaseFeature):
     name = "nginx_relay"
-    description = "Generate the nginx websocket relay (HTTP+HTTPS -> dropbear)"
-    depends_on = ["packages", "dropbear_service", "python_proxy"]
+    description = "Generate the nginx WebSocket relay (HTTP+HTTPS)"
+    # MUST run after certificates to have a valid cert
+    depends_on = ["packages", "dropbear_service", "python_proxy", "certificates"]
 
     @property
     def available_path(self) -> Path:
-        return NGINX_SITES_AVAILABLE / f"{NGINX_RELAY_NAME}.conf"
+        return NGINX_SITES_AVAILABLE / f"{NGINX_SITE_NAME}.conf"
 
     @property
     def enabled_path(self) -> Path:
-        return NGINX_SITES_ENABLED / f"{NGINX_RELAY_NAME}.conf"
+        return NGINX_SITES_ENABLED / f"{NGINX_SITE_NAME}.conf"
 
     def is_installed(self) -> bool:
         return self.enabled_path.exists() or self.enabled_path.is_symlink()
@@ -46,6 +39,7 @@ class NginxRelayFeature(BaseFeature):
         NGINX_SITES_AVAILABLE.mkdir(parents=True, exist_ok=True)
         NGINX_SITES_ENABLED.mkdir(parents=True, exist_ok=True)
 
+        self._remove_conflicting_sites()
         self._disable_default_site()
         config_text = self._render()
         self.available_path.write_text(config_text)
@@ -53,65 +47,112 @@ class NginxRelayFeature(BaseFeature):
         if not self.enabled_path.exists():
             Shell.run(f"ln -sf {self.available_path} {self.enabled_path}")
 
-        Shell.run("nginx -t")  # validate before touching the live service
+        Shell.run("nginx -t")
         Shell.run("systemctl enable nginx", check=False)
-        Shell.run("systemctl reload nginx || systemctl restart nginx")
-        log.success(f"nginx relay written to {self.available_path} and reloaded")
+
+        reload_result = Shell.run("systemctl reload nginx", check=False, timeout=10)
+        if not reload_result.ok:
+            log.warning("nginx reload failed; restarting instead.")
+            Shell.run("systemctl restart nginx", check=False, timeout=10)
+
+        log.success(f"nginx WebSocket relay written to {self.available_path}")
 
     def remove(self) -> None:
         Shell.run(f"rm -f {self.enabled_path}", check=False)
         Shell.run("systemctl reload nginx", check=False)
 
     def regenerate(self):
-        """Called by the dashboard after ports/cert change."""
         self.install()
 
-    # -- rendering ------------------------------------------------------
     def _disable_default_site(self):
-        default_link = NGINX_SITES_ENABLED / "default"
-        if default_link.exists() or default_link.is_symlink():
-            default_link.unlink()
-            log.debug("disabled nginx's default site (would shadow our catch-all)")
+        default = NGINX_SITES_ENABLED / "default"
+        if default.exists() or default.is_symlink():
+            default.unlink()
+            log.debug("disabled default site")
+
+    def _remove_conflicting_sites(self):
+        keep = [f"{NGINX_SITE_NAME}.conf", "default"]
+        for site in NGINX_SITES_ENABLED.glob("*.conf"):
+            if site.name not in keep:
+                log.info(f"Removing conflicting nginx site: {site.name}")
+                site.unlink()
+        for site in NGINX_SITES_ENABLED.glob("*"):
+            if site.is_symlink() and site.name not in keep:
+                try:
+                    target = site.readlink()
+                    if target.name != f"{NGINX_SITE_NAME}.conf":
+                        log.info(f"Removing conflicting symlink: {site.name}")
+                        site.unlink()
+                except Exception:
+                    pass
 
     def _render(self) -> str:
         data = state.ensure_defaults()
-        dropbear_port = data.get("dropbear_port", DROPBEAR_PORT_DEFAULT)
+        domain = data.get("cert_domain", "_")
         proxy_port = data.get("proxy_port", PROXY_PORT_DEFAULT)
         http_ports = sorted(HTTP_PORTS | set(data.get("custom_http_ports", [])))
         https_ports = sorted(HTTPS_PORTS | set(data.get("custom_https_ports", [])))
 
-        http_listen_block = "\n".join(f"    listen {p};" for p in http_ports)
+        # If sslh is installed, remove port 443 from nginx HTTPS list
+        if Path("/etc/sslh.cfg").exists() or Path("/etc/sslh/sslh.conf").exists():
+            if 443 in https_ports:
+                https_ports.remove(443)
+                log.debug("sslh detected – nginx will not listen on 443.")
 
-        https_server_block = ""
+        http_listen = "\n".join(f"    listen 0.0.0.0:{p};" for p in http_ports)
+
+        https_block = ""
         cert_path, key_path = self._resolve_cert_paths(data)
         if cert_path and key_path:
             https_tpl = (TEMPLATES_DIR / "nginx_relay_https.conf.tpl").read_text()
-            https_listen_block = "\n".join(f"    listen {p} ssl;" for p in https_ports)
-            https_server_block = (
+            https_listen = "\n".join(f"    listen 0.0.0.0:{p} ssl;" for p in https_ports)
+            https_block = (
                 https_tpl
-                .replace("@HTTPS_LISTEN_BLOCK@", https_listen_block)
+                .replace("@HTTPS_LISTEN_BLOCK@", https_listen)
                 .replace("@CERT_PATH@", cert_path)
                 .replace("@KEY_PATH@", key_path)
                 .replace("@PROXY_PORT@", str(proxy_port))
+                .replace("@DOMAIN@", domain)
             )
+            log.info(f"HTTPS block enabled with cert {cert_path}")
         else:
-            log.warning("no certificate configured yet — HTTPS relay ports "
-                        "will not be enabled until `sshauto cert` runs")
+            # No cert – nginx cannot serve HTTPS
+            log.critical("No valid Cloudflare certificate found. Run 'sshauto cert' first.")
+            raise ConfigError("Certificate missing. Run 'sshauto cert' to generate one.")
 
-        base_tpl_path = TEMPLATES_DIR / "nginx_relay.conf.tpl"
-        if not base_tpl_path.exists():
-            raise ConfigError(f"missing template {base_tpl_path}")
+        base_tpl = TEMPLATES_DIR / "nginx_relay.conf.tpl"
+        if not base_tpl.exists():
+            raise ConfigError(f"missing template {base_tpl}")
 
         return (
-            base_tpl_path.read_text()
-            .replace("@HTTP_LISTEN_BLOCK@", http_listen_block)
+            base_tpl.read_text()
+            .replace("@HTTP_LISTEN_BLOCK@", http_listen)
             .replace("@PROXY_PORT@", str(proxy_port))
-            .replace("@HTTPS_SERVER_BLOCK@", https_server_block)
+            .replace("@DOMAIN@", domain)
+            .replace("@HTTPS_SERVER_BLOCK@", https_block)
         )
 
     def _resolve_cert_paths(self, data: dict) -> tuple[str | None, str | None]:
-        cert_path = data.get("cert_fullchain_path")
-        key_path = data.get("cert_key_path")
-        if cert_path and key_path and Path(cert_path).exists() and Path(key_path).exists():
-            return cert_path, key_path
+        """
+        Only look for Cloudflare certificate from state or SSHAUTO_CERT_DIR.
+        No Let's Encrypt fallback.
+        """
+        # 1. State paths
+        cert = data.get("cert_fullchain_path")
+        key = data.get("cert_key_path")
+        if cert and key and Path(cert).exists() and Path(key).exists():
+            return cert, key
+
+        domain = data.get("cert_domain")
+        if domain:
+            # 2. Cloudflare self‑signed (from certificates feature)
+            cf_cert = SSHAUTO_CERT_DIR / domain / "fullchain.pem"
+            cf_key = SSHAUTO_CERT_DIR / domain / "privkey.pem"
+            if cf_cert.exists() and cf_key.exists():
+                log.info(f"Using Cloudflare certificate from {SSHAUTO_CERT_DIR / domain}")
+                data["cert_fullchain_path"] = str(cf_cert)
+                data["cert_key_path"] = str(cf_key)
+                state.save(data)
+                return str(cf_cert), str(cf_key)
+
         return None, None

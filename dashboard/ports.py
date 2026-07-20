@@ -1,6 +1,6 @@
 """
 Manages runtime port lists via state storage and hooks updates directly
-into the newly restructured Nginx relay and Firewall components.
+into the Nginx relay and Firewall components.
 """
 from __future__ import annotations
 

@@ -14,6 +14,9 @@ SERVICES = [
     "ws-ssh-proxy",
     "badvpn-udpgw",
     "sslh",
+    "hysteria-server",
+    "dnstt-server",
+    "pingtunnel",
 ]
 
 
