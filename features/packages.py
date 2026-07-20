@@ -50,21 +50,7 @@ class PackagesFeature(BaseFeature):
         result = Shell.run(f"dpkg -s {pkg}", check=False)
         return result.ok and "Status: install ok installed" in result.stdout
 
-    def _remove_conflicting(self):
-        present = [p for p in REMOVE_PACKAGES if self._dpkg_installed(p)]
-        if not present:
-            log.info("no conflicting packages present (apache*/ufw/firewalld)")
-            return
-        log.important(f"purging conflicting packages: {', '.join(present)}")
-        for svc in ("apache2", "ufw", "firewalld"):
-            Shell.run(f"systemctl stop {svc}", check=False)
-            Shell.run(f"systemctl disable {svc}", check=False)
-        Shell.run(
-            "DEBIAN_FRONTEND=noninteractive apt-get purge -y " + " ".join(present),
-            check=False,
-            timeout=180,
-        )
-        Shell.run("apt-get autoremove -y", check=False, timeout=180)
+
 
     def _install_pip_packages(self):
         if not PIP_PACKAGES:
