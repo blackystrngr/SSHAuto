@@ -23,16 +23,9 @@ fi
 # ---- 1. FULL IPTABLES FLUSH ----
 c_cyan "==> Flushing all iptables rules (filter, nat, mangle, raw)..."
 
-rm -rf /etc/iptables/rules.v6 /etc/iptables/rules.v4 /usr/share/netfilter-persistent/plugins.d/15-ip4tables /usr/share/netfilter-persistent/plugins.d/25-ip6tables
-
 c_green "iptables flushed and default policies set to ACCEPT."
 
 
-# ---- 4. CLEAR GIT PROXY ----
-c_cyan "==> Removing any stuck Git proxy settings..."
-git config --global --unset http.proxy 2>/dev/null || true
-git config --global --unset https.proxy 2>/dev/null || true
-# ---- 2. FIX SYSTEMD-RESOLVED CONFIGURATION (DNS: 1.1.1.1, 1.0.0.1) ----
 
 # ---- 3. INSTALL DEPENDENCIES ----
 c_cyan "==> Updating apt and installing bootstrap dependencies"
