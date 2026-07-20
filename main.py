@@ -45,11 +45,7 @@ CORE_FEATURES = [
 ]
 
 # Optional features (only installed via dashboard or --only)
-OPTIONAL_FEATURES = [
-    "hysteria2",
-    "dns_tunnel",
-    "icmp_tunnel",
-]
+
 
 NON_IDEMPOTENT = {"certificates"}
 
@@ -123,7 +119,7 @@ def cmd_install(args):
         if args.only:
             log.info(f"Installed only: {', '.join(wanted)}")
         else:
-            log.info("Core features installed. Optional tunnels (Hysteria2, DNSTT, ICMP) can be added via dashboard (options 12-14).")
+            log.info("Core features installed.")
 
     log.info("Reloading systemd to pick up new unit files...")
     Shell.run("systemctl daemon-reload", check=False, timeout=10)
