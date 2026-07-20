@@ -1,15 +1,6 @@
-"""
-Configures the *real* OpenSSH daemon (direct access on its own port —
-separate from dropbear, which is the one relayed through nginx/websocket).
-Picks a random banner from data/banners.txt at install time and applies
-a few sane hardening defaults without locking the operator out.
-"""
 from __future__ import annotations
-
-import random
-import re
+import random, re
 from pathlib import Path
-
 from core.config import APP_ROOT, SSHD_CONFIG, SSH_BANNER_PATH, SSH_PORT_DEFAULT, state
 from core.exceptions import ConfigError
 from core.logger import log
@@ -20,7 +11,7 @@ BANNERS_FILE = APP_ROOT / "data" / "banners.txt"
 
 HARDENING_DIRECTIVES = {
     "PermitRootLogin": "prohibit-password",
-    "PasswordAuthentication": "yes",   # dropbear/relay users still need password auth
+    "PasswordAuthentication": "yes",
     "X11Forwarding": "no",
     "ClientAliveInterval": "60",
     "ClientAliveCountMax": "3",
@@ -28,53 +19,45 @@ HARDENING_DIRECTIVES = {
     "LoginGraceTime": "20",
 }
 
-
 class SSHServiceFeature(BaseFeature):
     name = "ssh_service"
     description = "Configure OpenSSH: port, banner, hardening"
-    depends_on = ["packages"]   # <-- this dependency will be resolved once packages.py exists
+    depends_on = ["packages"]
 
     def is_installed(self) -> bool:
         return SSH_BANNER_PATH.exists() and "Banner" in SSHD_CONFIG.read_text()
 
     def install(self) -> None:
         if not SSHD_CONFIG.exists():
-            raise ConfigError(f"{SSHD_CONFIG} not found — is openssh-server installed?")
-
+            raise ConfigError(f"{SSHD_CONFIG} not found")
         banner = self._pick_random_banner()
         SSH_BANNER_PATH.write_text(banner + "\n")
-        log.info(f"wrote random banner ({len(banner.splitlines())} lines) to {SSH_BANNER_PATH}")
-
+        log.info(f"wrote random banner to {SSH_BANNER_PATH}")
         data = state.ensure_defaults()
         port = data.get("ssh_port", SSH_PORT_DEFAULT)
-
         directives = dict(HARDENING_DIRECTIVES)
         directives["Port"] = str(port)
         directives["Banner"] = str(SSH_BANNER_PATH)
-
         self._apply_directives(directives)
-        Shell.run("sshd -t")  # validate config before touching the live service
+        Shell.run("sshd -t")
         Shell.run("systemctl restart ssh || systemctl restart sshd")
-        log.success(f"sshd listening on port {port} with new banner")
+        log.success(f"sshd listening on port {port}")
 
     def remove(self) -> None:
-        log.warning("ssh_service.remove() only strips our directives, "
-                     "it does not uninstall openssh-server")
         text = SSHD_CONFIG.read_text()
         for key in list(HARDENING_DIRECTIVES) + ["Banner"]:
             text = re.sub(rf"(?m)^{key}\s+.*$\n?", "", text)
         SSHD_CONFIG.write_text(text)
         Shell.run("systemctl restart ssh || systemctl restart sshd", check=False)
 
-    # -- helpers ------------------------------------------------------
-    def _pick_random_banner(self) -> str:
+    def _pick_random_banner(self):
         if not BANNERS_FILE.exists():
-            return "Authorized access only. All activity is logged."
+            return "Authorized access only."
         raw = BANNERS_FILE.read_text()
         options = [b.strip() for b in raw.split("---BANNER---") if b.strip()]
         return random.choice(options) if options else "Authorized access only."
 
-    def _apply_directives(self, directives: dict[str, str]):
+    def _apply_directives(self, directives):
         text = SSHD_CONFIG.read_text()
         for key, value in directives.items():
             pattern = re.compile(rf"(?m)^#?\s*{re.escape(key)}\s+.*$")
