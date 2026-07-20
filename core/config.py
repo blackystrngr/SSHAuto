@@ -24,27 +24,17 @@ DROPBEAR_PORT_DEFAULT = 110
 PROXY_PORT_DEFAULT = 9955
 SQUID_PORT_DEFAULT = 3128
 
-# New tunnel defaults
-HYSTERIA_PORT_DEFAULT = 8443
-HYSTERIA_DOMAIN_DEFAULT = "ns1.hi.blackstrngr.qzz.io"
-HYSTERIA_PASSWORD_DEFAULT = "helloworld"
-
-DNS_TUNNEL_PORT_DEFAULT = 5300
-DNS_TUNNEL_DOMAIN_DEFAULT = "ns1.hi.blackstrngr.qzz.io"
-DNS_TUNNEL_PASSWORD_DEFAULT = "helloworld"
-
-ICMP_TUNNEL_KEY_DEFAULT = 123456
 
 USER_GROUP = "sshauto-users"
-GIT_POLL_INTERVAL_SECONDS = 30
+
 
 # ----------------------------------------------------------------------
 # Package Management
 # ----------------------------------------------------------------------
 REQUIRED_PACKAGES = [
     "nginx", "dropbear", "fail2ban", "iptables", "curl", "git",
-    "certbot", "squid", "sslh", "cron", "iodine",
-    "build-essential", "libpcap-dev", "wget", "ufw", "golang-go"
+    "certbot", "squid", "sslh", "cron",
+    "build-essential", "libpcap-dev", "wget", "golang-go"
 ]
 REMOVE_PACKAGES = ["apache2", "ufw", "firewalld"]
 PIP_PACKAGES = []
