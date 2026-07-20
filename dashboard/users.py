@@ -1,14 +1,6 @@
-"""
-Manages the actual Linux accounts that authenticate through dropbear
-(relayed by nginx) or directly through OpenSSH. Accounts get a
-no-interactive-shell (tunnel only) and are tagged into USER_GROUP so the
-dashboard can tell "our" accounts apart from normal system accounts.
-"""
 from __future__ import annotations
-
 import re
 from dataclasses import dataclass
-
 from core.config import USER_GROUP
 from core.exceptions import ValidationError
 from core.logger import log
@@ -16,13 +8,11 @@ from core.shell import Shell
 
 USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{2,31}$")
 
-
 @dataclass
 class SSHUser:
     username: str
     expires: str
     locked: bool
-
 
 class UserManager:
     def __init__(self):
@@ -33,89 +23,64 @@ class UserManager:
         Shell.run(f"getent group {USER_GROUP} || groupadd {USER_GROUP}", check=False)
 
     def _ensure_shells(self):
-        """Ensure /usr/sbin/nologin and /bin/false are in /etc/shells for Dropbear."""
-        for shell in ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false"):
-            if Shell.run(f"test -x {shell}", check=False).ok:
-                result = Shell.run(f"grep -Fx '{shell}' /etc/shells", check=False)
-                if not result.ok:
-                    Shell.run(f"echo {shell} >> /etc/shells", check=False)
+        shells = ["/bin/false", "/sbin/nologin", "/usr/sbin/nologin"]
+        for sh in shells:
+            if sh not in Shell.run("cat /etc/shells", check=False).stdout:
+                Shell.run(f"echo {sh} >> /etc/shells", check=False)
 
-    def create(self, username: str, password: str, expire_days: int | None = 30) -> SSHUser:
+    def create(self, username, password, expire_days=30):
         if not USERNAME_RE.match(username):
-            raise ValidationError(
-                "invalid username",
-                hint="use 3-32 lowercase letters/digits/underscore/hyphen, starting with a letter",
-            )
-        exists = Shell.run(f"id -u {username}", check=False)
-        if exists.ok:
+            raise ValidationError("invalid username")
+        if Shell.run(f"id -u {username}", check=False).ok:
             raise ValidationError(f"user '{username}' already exists")
-
         shell = self._tunnel_shell()
-
-        # Create user with supplementary group
         Shell.run(f"useradd -m -s {shell} -G {USER_GROUP} {username}")
-
-        # Set password using printf to avoid extra newlines
         Shell.run(f"printf '%s:%s\\n' '{username}' '{password}' | chpasswd", check=False)
-
-        # Unlock the account
         Shell.run(f"passwd -u {username}", check=False)
-
         if expire_days:
             Shell.run(f"chage -M {expire_days} {username}", check=False)
-
-        # Verify the account is not locked
         if self._is_locked(username):
-            log.warning(f"User {username} is still locked. Forcing unlock...")
             Shell.run(f"passwd -u {username}", check=False)
+        log.success(f"created user '{username}'")
+        return SSHUser(username, self._expiry_of(username), False)
 
-        log.success(f"created tunnel user '{username}'"
-                     + (f" (expires in {expire_days}d)" if expire_days else ""))
-        return SSHUser(username, self._expiry_of(username), locked=False)
-
-    def delete(self, username: str):
-        result = Shell.run(f"userdel -r {username}", check=False)
-        if not result.ok:
-            raise ValidationError(f"could not delete '{username}': {result.stderr.strip()}")
+    def delete(self, username):
+        if not Shell.run(f"userdel -r {username}", check=False).ok:
+            raise ValidationError(f"could not delete '{username}'")
         log.success(f"deleted user '{username}'")
 
-    def list(self) -> list[SSHUser]:
+    def list(self):
         group_res = Shell.run(f"getent group {USER_GROUP}", check=False)
-        if not group_res.ok or ":" not in group_res.stdout:
+        if not group_res.ok:
             return []
-
         parts = group_res.stdout.strip().split(":")
         if len(parts) < 3:
             return []
-
         gid = parts[2]
-        supp_members = parts[3].split(",") if len(parts) > 3 else []
-        usernames = set(u for u in supp_members if u)
-
+        usernames = set(parts[3].split(",")) if len(parts) > 3 else set()
         passwd_res = Shell.run("getent passwd", check=False)
         if passwd_res.ok:
             for line in passwd_res.stdout.splitlines():
-                p_parts = line.split(":")
-                if len(p_parts) > 3 and p_parts[3] == gid:
-                    usernames.add(p_parts[0])
+                p = line.split(":")
+                if len(p) > 3 and p[3] == gid:
+                    usernames.add(p[0])
+        return [SSHUser(u, self._expiry_of(u), self._is_locked(u)) for u in sorted(usernames) if u]
 
-        return [SSHUser(u, self._expiry_of(u), locked=self._is_locked(u)) for u in sorted(usernames)]
-
-    def _tunnel_shell(self) -> str:
+    def _tunnel_shell(self):
         for candidate in ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false"):
             if Shell.run(f"test -x {candidate}", check=False).ok:
                 return candidate
         return "/bin/false"
 
-    def _expiry_of(self, username: str) -> str:
+    def _expiry_of(self, username):
         result = Shell.run(f"chage -l {username}", check=False)
         if not result.ok:
             return "unknown"
         for line in result.stdout.splitlines():
-            if line.lower().startswith("account expires"):
+            if "Account expires" in line:
                 return line.split(":", 1)[1].strip()
         return "never"
 
-    def _is_locked(self, username: str) -> bool:
+    def _is_locked(self, username):
         result = Shell.run(f"passwd -S {username}", check=False)
         return result.ok and " L " in f" {result.stdout} "
