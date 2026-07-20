@@ -18,7 +18,6 @@ class FirewallFeature(BaseFeature):
         Shell.run("iptables -P FORWARD ACCEPT", check=False)
         Shell.run("iptables -P OUTPUT ACCEPT", check=False)
         log.success("Firewall: all traffic allowed.")
-        log.important("Open UDP 7300, TCP 80, 443, 8443, 3128, 4443 in cloud console if needed.")
 
     def remove(self) -> None:
         self.install()
