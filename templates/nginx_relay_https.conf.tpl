@@ -2,6 +2,7 @@ server {
 @HTTPS_LISTEN_BLOCK@
     server_name @DOMAIN@;
     tcp_nodelay on;
+    access_log off;
     client_header_timeout 86400s;
     client_body_timeout 86400s;
     client_max_body_size 0;
