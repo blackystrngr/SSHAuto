@@ -27,18 +27,9 @@ class SSHUser:
 class UserManager:
     def __init__(self):
         self._ensure_group()
-        self._ensure_shells()
 
     def _ensure_group(self):
         Shell.run(f"getent group {USER_GROUP} || groupadd {USER_GROUP}", check=False)
-
-    def _ensure_shells(self):
-        """Ensure /usr/sbin/nologin and /bin/false are in /etc/shells for Dropbear."""
-        for shell in ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false"):
-            if Shell.run(f"test -x {shell}", check=False).ok:
-                result = Shell.run(f"grep -Fx '{shell}' /etc/shells", check=False)
-                if not result.ok:
-                    Shell.run(f"echo {shell} >> /etc/shells", check=False)
 
     def create(self, username: str, password: str, expire_days: int | None = 30) -> SSHUser:
         if not USERNAME_RE.match(username):
@@ -51,23 +42,14 @@ class UserManager:
             raise ValidationError(f"user '{username}' already exists")
 
         shell = self._tunnel_shell()
-
-        # Create user with supplementary group
+        
+        # Changed -g to -G to assign as a supplementary group, ensuring
+        # standard visibility in /etc/group files.
         Shell.run(f"useradd -m -s {shell} -G {USER_GROUP} {username}")
-
-        # Set password using printf to avoid extra newlines
-        Shell.run(f"printf '%s:%s\\n' '{username}' '{password}' | chpasswd", check=False)
-
-        # Unlock the account
-        Shell.run(f"passwd -u {username}", check=False)
+        Shell.run(f"chpasswd", input_text=f"{username}:{password}\n")
 
         if expire_days:
             Shell.run(f"chage -M {expire_days} {username}", check=False)
-
-        # Verify the account is not locked
-        if self._is_locked(username):
-            log.warning(f"User {username} is still locked. Forcing unlock...")
-            Shell.run(f"passwd -u {username}", check=False)
 
         log.success(f"created tunnel user '{username}'"
                      + (f" (expires in {expire_days}d)" if expire_days else ""))
@@ -80,6 +62,10 @@ class UserManager:
         log.success(f"deleted user '{username}'")
 
     def list(self) -> list[SSHUser]:
+        """
+        Scans both primary and supplementary user assignments to ensure
+        all tunnel accounts show up reliably in the dashboard.
+        """
         group_res = Shell.run(f"getent group {USER_GROUP}", check=False)
         if not group_res.ok or ":" not in group_res.stdout:
             return []
@@ -89,9 +75,11 @@ class UserManager:
             return []
 
         gid = parts[2]
+        # Capture supplementary members (comma-separated list at the end)
         supp_members = parts[3].split(",") if len(parts) > 3 else []
         usernames = set(u for u in supp_members if u)
 
+        # Capture primary members whose default GID matches the target group
         passwd_res = Shell.run("getent passwd", check=False)
         if passwd_res.ok:
             for line in passwd_res.stdout.splitlines():

@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """
 sshauto — SSH-over-websocket relay autoscript.
+
+Usage:
+    python3 main.py install               full automated first-time setup
+    python3 main.py install --only nginx_relay,firewall
+    python3 main.py update                git pull + re-apply (manual trigger;
+                                           normally the 30s timer does this)
+    python3 main.py status                show each feature's install state
+    python3 main.py cert                  (re)run the certificate wizard
+    python3 main.py uninstall             best-effort teardown
+    python3 main.py dashboard             same as typing `kk`
 """
 from __future__ import annotations
 
@@ -8,16 +18,14 @@ import argparse
 import datetime
 import os
 import sys
-from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core.config import state
-from core.exceptions import SSHAutoError
-from core.logger import log
-from core.plugin_manager import PluginManager
-from core.shell import Shell
-from core.services import restart_all_services
+from core.config import state  # noqa: E402
+from core.exceptions import SSHAutoError  # noqa: E402
+from core.logger import log  # noqa: E402
+from core.plugin_manager import PluginManager  # noqa: E402
+from core.shell import Shell  # noqa: E402
 
 BANNER = r"""
    _____ _____ _   _   ___         _
@@ -30,23 +38,8 @@ BANNER = r"""
    websocket relay autoscript — type 'kk' any time for the dashboard
 """
 
-# Core features (always installed)
-CORE_FEATURES = [
-    "packages",
-    "firewall",
-    "dropbear_service",
-    "python_proxy",
-    "certificates",
-    "nginx_relay",
-    "ssh_service",
-    "fail2ban_service",
-    "squid_proxy",
-    "udpgw_service",
-]
-
-# Optional features (only installed via dashboard or --only)
-
-
+# Certificates are deliberately excluded from a blanket "install everything"
+# so re-issuing a cert is always an explicit operator action.
 NON_IDEMPOTENT = {"certificates"}
 
 
@@ -56,57 +49,23 @@ def require_root():
         sys.exit(1)
 
 
-def _clean_old_proxy():
-    log.info("Cleaning up old proxy files...")
-    for svc in ["ws-ssh-proxy", "sshauto-proxy"]:
-        Shell.run(f"systemctl stop {svc}", check=False, timeout=5)
-        Shell.run(f"systemctl disable {svc}", check=False, timeout=5)
-    old_bins = [
-        "/usr/local/bin/ws_ssh_proxy.py",
-        "/usr/local/bin/ws_proxy.py",
-    ]
-    for path in old_bins:
-        p = Path(path)
-        if p.exists():
-            p.unlink()
-            log.debug(f"removed {path}")
-    old_services = [
-        "/etc/systemd/system/ws-ssh-proxy.service",
-        "/etc/systemd/system/sshauto-proxy.service",
-    ]
-    for path in old_services:
-        p = Path(path)
-        if p.exists():
-            p.unlink()
-            log.debug(f"removed {path}")
-    Shell.run("systemctl daemon-reload", check=False, timeout=5)
-    log.success("Old proxy files cleaned.")
-
-
 def cmd_install(args):
     require_root()
     if not args.quiet:
         print(BANNER)
 
-    _clean_old_proxy()
-
     manager = PluginManager()
-    # Determine which features to install
-    if args.only:
-        wanted = args.only.split(",")
-    else:
-        # Install core features only
-        wanted = CORE_FEATURES
+    only = args.only.split(",") if args.only else None
 
     if args.skip_non_idempotent:
-        wanted = [n for n in wanted if n not in NON_IDEMPOTENT]
+        only = [n for n in (only or manager.names()) if n not in NON_IDEMPOTENT]
 
     data = state.ensure_defaults()
     if not data.get("created_at"):
         data["created_at"] = datetime.datetime.utcnow().isoformat()
         state.save(data)
 
-    results = manager.install_all(only=wanted, force=args.force)
+    results = manager.install_all(only=only)
 
     if not args.quiet and not args.skip_non_idempotent:
         _install_kk_command()
@@ -116,15 +75,12 @@ def cmd_install(args):
         if failures:
             log.warning(f"Some features failed: {', '.join(failures)}. "
                         f"Run 'python3 main.py status' for details.")
-        if args.only:
-            log.info(f"Installed only: {', '.join(wanted)}")
-        else:
-            log.info("Core features installed.")
 
-    log.info("Reloading systemd to pick up new unit files...")
-    Shell.run("systemctl daemon-reload", check=False, timeout=10)
-    restart_all_services()
 
+def cmd_update(args):
+    require_root()
+    log.info("manually triggering the same check the 30s timer runs")
+    Shell.run(f"{sys.executable} {os.path.dirname(__file__)}/scripts/autoupdate_check.py")
 
 
 def cmd_status(args):
@@ -134,7 +90,7 @@ def cmd_status(args):
 def cmd_cert(args):
     require_root()
     from features.certificates import CertificatesFeature
-    CertificatesFeature().interactive()
+    CertificatesFeature().install()
 
 
 def cmd_uninstall(args):
@@ -144,7 +100,7 @@ def cmd_uninstall(args):
         try:
             manager.get(name).remove()
             log.success(f"{name} removed")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             log.error(f"{name} teardown failed: {exc}")
 
 
@@ -155,6 +111,7 @@ def cmd_dashboard(args):
 
 
 def _install_kk_command():
+    """Symlinks the `kk` word to launch the dashboard from any shell."""
     from core.config import APP_ROOT
     wrapper = "/usr/local/bin/kk"
     try:
@@ -176,9 +133,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_install.add_argument("--skip-non-idempotent", action="store_true",
                             help="used by the auto-updater; skips certificates")
     p_install.add_argument("--quiet", action="store_true")
-    p_install.add_argument("--force", action="store_true",
-                           help="force reinstall – overwrite all configurations")
     p_install.set_defaults(func=cmd_install)
+
+    p_update = sub.add_parser("update", help="manually trigger a git-update check")
+    p_update.set_defaults(func=cmd_update)
 
     p_status = sub.add_parser("status", help="show install status of every feature")
     p_status.set_defaults(func=cmd_status)

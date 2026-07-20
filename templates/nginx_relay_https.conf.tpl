@@ -1,22 +1,21 @@
+# ---- TLS relay ---------------------------------------------------------
+# TLS is terminated here (self-signed / ACME / Cloudflare Origin CA -
+# whichever the operator picked at install time), then the decrypted
+# websocket-upgrade request is forwarded to dropbear exactly like the
+# plain-HTTP block above. From the client's perspective this is a normal
+# HTTPS connection to a CDN edge; the CDN/edge sees only encrypted bytes.
 server {
 @HTTPS_LISTEN_BLOCK@
-    server_name @DOMAIN@;
+    server_name _;
     tcp_nodelay on;
-    access_log off;
-    client_header_timeout 86400s;
-    client_body_timeout 86400s;
-    client_max_body_size 0;
 
     ssl_certificate     @CERT_PATH@;
     ssl_certificate_key @KEY_PATH@;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
-    ssl_session_cache shared:SSL:20m;
-    ssl_session_timeout 1d;
-    ssl_session_tickets on;
-    ssl_buffer_size 4k;          # flush TLS records sooner
-    ssl_early_data on;           # 0‑RTT reconnects
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
 
     location / {
         proxy_pass http://127.0.0.1:@PROXY_PORT@;
@@ -29,9 +28,8 @@ server {
 
         proxy_buffering off;
         proxy_request_buffering off;
-        proxy_read_timeout 86400s;
-        proxy_send_timeout 86400s;
-        proxy_connect_timeout 5s;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
         tcp_nodelay on;
     }
 }

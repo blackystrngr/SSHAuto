@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # sshauto bootstrap installer.
+# Usage on a fresh Debian/Ubuntu VPS:
+#   curl -fsSL https://raw.githubusercontent.com/<you>/sshauto/main/install.sh | sudo bash
 set -euo pipefail
 
-REPO_URL="https://github.com/blackystrngr/SSHAuto"
-BRANCH="main"
+REPO_URL="${SSHAUTO_REPO_URL:-https://github.com/blackystrngr/sshauto.git}"
+BRANCH="${SSHAUTO_BRANCH:-main}"
 APP_ROOT="/opt/sshauto"
 
 c_red()   { printf '\033[31m%s\033[0m\n' "$1"; }
@@ -20,48 +22,20 @@ if ! grep -qiE 'debian|ubuntu' /etc/os-release 2>/dev/null; then
     exit 1
 fi
 
-
-
-
-
-# ---- 3. INSTALL DEPENDENCIES ----
 c_cyan "==> Updating apt and installing bootstrap dependencies"
 apt-get update -y
-apt-get install -y python3 python3-pip git curl wget ca-certificates
+DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pip git curl wget ca-certificates
 
-
-
-# ---- 5. CLONE WITH RETRIES ----
-c_cyan "==> Cloning sshauto into ${APP_ROOT}"
-rm -rf "${APP_ROOT}"
-
-max_retries=5
-retry_delay=5
-attempt=0
-clone_success=1
-
-while [[ $attempt -lt $max_retries ]]; do
-    attempt=$((attempt + 1))
-    c_cyan "Clone attempt $attempt/$max_retries..."
-    if git clone --branch "${BRANCH}" --depth 1 "${REPO_URL}" "${APP_ROOT}"; then
-        clone_success=0
-        break
-    fi
-    c_red "Clone attempt $attempt failed. Retrying in ${retry_delay}s..."
-    sleep "${retry_delay}"
-done
-
-if [[ $clone_success -ne 0 ]]; then
-    c_red "Clone failed after ${max_retries} attempts."
-    c_red "Please check your internet connection."
-    c_red "If you have the repo locally, copy it to ${APP_ROOT} and run:"
-    c_red "  sudo python3 ${APP_ROOT}/main.py install --force"
-    exit 1
+c_cyan "==> Fetching sshauto into ${APP_ROOT}"
+if [[ -d "${APP_ROOT}/.git" ]]; then
+    git -C "${APP_ROOT}" fetch origin "${BRANCH}"
+    git -C "${APP_ROOT}" reset --hard "origin/${BRANCH}"
+else
+    rm -rf "${APP_ROOT}"
+    git clone --branch "${BRANCH}" --depth 1 "${REPO_URL}" "${APP_ROOT}"
 fi
 
-c_green "Clone successful."
-
-# ---- 6. SETUP PERMISSIONS & DEPENDENCIES ----
+# Ensure executable permissions are cleanly applied across scripts
 chmod +x "${APP_ROOT}/main.py"
 if [[ -d "${APP_ROOT}/scripts" ]]; then
     chmod +x "${APP_ROOT}/scripts/"*.py 2>/dev/null || true
@@ -69,13 +43,12 @@ fi
 
 c_cyan "==> Installing Python dependencies from requirements.txt"
 if [[ -f "${APP_ROOT}/requirements.txt" ]]; then
-    pip3 install -r "${APP_ROOT}/requirements.txt"
+    pip3 install --break-system-packages --upgrade -r "${APP_ROOT}/requirements.txt"
 else
     c_red "Warning: requirements.txt not found in ${APP_ROOT}"
 fi
 
-# ---- 7. RUN INSTALLER ----
-c_cyan "==> Running the automated installer (--force to rewrite all configs)"
-python3 "${APP_ROOT}/main.py" install --force
+c_cyan "==> Running the automated installer"
+python3 "${APP_ROOT}/main.py" install
 
 c_green "==> Done. Type 'kk' any time to open the dashboard."

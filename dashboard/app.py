@@ -1,5 +1,6 @@
 """
-The interactive dashboard, launched by typing `kk` at the shell.
+The interactive dashboard, launched by typing `kk` at the shell (see
+scripts/install_kk.sh for how that alias gets wired up).
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ class Dashboard:
                 return
             self._dispatch(choice)
 
+    # -- screens ----------------------------------------------------------
     def _render_home(self):
         ui.clear()
         ui.header("sshauto dashboard", "type a number, or 'q' to quit")
@@ -46,11 +48,7 @@ class Dashboard:
             ("7", "Remove custom port"),
             ("8", "Show active ports"),
             ("9", "Server status (services)"),
-            ("11", "Extra Services (Squid, stunnel, sslh, UDPGW)"),
-            ("12", "Hysteria2 UDP/QUIC tunnel"),
-            ("13", "DNS tunnel (iodine)"),
-            ("14", "ICMP tunnel (pingtunnel)"),
-            ("15", "AdBlock DNS (ads/trackers/malware/miners)"),
+            ("10", "Network Optimizer & BBR Menu"),
             ("0", "Exit"),
         ])
 
@@ -65,11 +63,7 @@ class Dashboard:
             "7": lambda: self._remove_port(),
             "8": self._show_ports,
             "9": self._service_status,
-            "11": self._extra_services_status,
-            "12": self._manage_hysteria2,
-            "13": self._manage_dns_tunnel,
-            "14": self._manage_icmp_tunnel,
-            "15": self._manage_adblock,
+            "10": self._manage_network_optimizer,
         }
         action = actions.get(choice)
         if not action:
@@ -86,6 +80,7 @@ class Dashboard:
             pass
         ui.pause()
 
+    # -- actions ------------------------------------------------------
     def _create_user(self):
         ui.clear()
         ui.header("create user")
@@ -93,18 +88,7 @@ class Dashboard:
         password = ui.prompt("password")
         expiry_raw = ui.prompt("expires in days [30]") or "30"
         expiry = int(expiry_raw) if expiry_raw.isdigit() else 30
-        try:
-            user = self.users.create(username, password, expiry)
-            log.success(f"User '{user.username}' created successfully.")
-            print()
-            ui.kv_row("Username", user.username, color="\033[1;32m")
-            ui.kv_row("Password", password, color="\033[1;32m")
-            ui.kv_row("Expires", user.expires)
-            print()
-            log.important("Use these credentials in your SSH client (WebSocket mode).")
-        except Exception as e:
-            log.error(f"Failed to create user: {e}")
-        ui.pause()
+        self.users.create(username, password, expiry)
 
     def _delete_user(self):
         ui.clear()
@@ -160,8 +144,6 @@ class Dashboard:
         data = state.load()
         ui.kv_row("Dropbear backend", f"127.0.0.1:{data.get('dropbear_port')}")
         ui.kv_row("SSH direct port", str(data.get("ssh_port")))
-        ui.kv_row("Squid proxy", "127.0.0.1:3128")
-        ui.kv_row("UDP Gateway", "0.0.0.0:7300 (public)")
 
     def _service_status(self):
         ui.clear()
@@ -169,88 +151,74 @@ class Dashboard:
         from core.plugin_manager import PluginManager
         PluginManager().status_all()
 
-    
-    def _extra_services_status(self):
-        ui.clear()
-        ui.header("Extra Services Overview", "Squid, stunnel, sslh, UDPGW")
+    def _manage_network_optimizer(self):
+        """Interactive dashboard screen mirroring 3x-ui optimization controls."""
+        try:
+            from features.network_optimizer import NetworkOptimizerFeature
+            optimizer = NetworkOptimizerFeature()
+        except ImportError:
+            from core.logger import log
+            log.error("NetworkOptimizerFeature module not found at features/network_optimizer.py")
+            return
 
-        from core.shell import Shell
-        from pathlib import Path
-
-        squid_active = Shell.run("systemctl is-active squid", check=False).ok
-        squid_installed = Path("/etc/squid/squid.conf").exists()
-        ui.kv_row("Squid HTTP Proxy",
-                  f"{'✅ ACTIVE' if squid_active else '❌ INACTIVE'} (port 3128 internal)",
-                  color="\033[1;32m" if squid_active else "\033[1;31m")
-
-        stunnel_active = Shell.run("systemctl is-active stunnel4", check=False).ok
-        stunnel_installed = Path("/etc/stunnel/stunnel.conf").exists()
-        ui.kv_row("stunnel SSL Tunnel",
-                  f"{'✅ ACTIVE' if stunnel_active else '❌ INACTIVE'} (port 4443 internal)",
-                  color="\033[1;32m" if stunnel_active else "\033[1;31m")
-
-        sslh_active = Shell.run("systemctl is-active sslh", check=False).ok
-        sslh_installed = Path("/etc/default/sslh").exists()
-        ui.kv_row("sslh TLS Demuxer",
-                  f"{'✅ ACTIVE' if sslh_active else '❌ INACTIVE'} (port 443)",
-                  color="\033[1;32m" if sslh_active else "\033[1;31m")
-
-        udpgw_active = Shell.run("systemctl is-active badvpn-udpgw", check=False).ok
-        udpgw_installed = Path("/usr/local/bin/badvpn-udpgw").exists()
-        ui.kv_row("badvpn-udpgw (UDP)",
-                  f"{'✅ ACTIVE' if udpgw_active else '❌ INACTIVE'} (port 7300 public)",
-                  color="\033[1;32m" if udpgw_active else "\033[1;31m")
-
-        print()
-        ui.kv_row("Port 443", "sslh forwards → nginx:8443 (HTTPS/WS) and stunnel:4443 (raw SSL)")
-        ui.kv_row("Port 80/8080/8880", "nginx splits → WebSocket (Python proxy) and plain HTTP (Squid)")
-        print()
-        log.important("Use 'sudo python3 main.py install --only <feature>' to enable/disable individual services.")
-
-    def _manage_hysteria2(self):
-        from features.hysteria2 import Hysteria2Feature
-        self._toggle_feature(Hysteria2Feature())
-
-    def _manage_dns_tunnel(self):
-        from features.dns_tunnel import DnsTunnelFeature
-        self._toggle_feature(DnsTunnelFeature())
-
-    def _manage_icmp_tunnel(self):
-        from features.icmp_tunnel import IcmpTunnelFeature
-        self._toggle_feature(IcmpTunnelFeature())
-
-    def _toggle_feature(self, feature):
-        ui.clear()
-        ui.header(f"Manage {feature.name}")
-        status = "Active" if feature.is_installed() else "Inactive"
-        ui.kv_row("Status", status)
-        print()
-        ui.menu([
-            ("1", "Install/Enable"),
-            ("2", "Remove/Disable"),
-            ("0", "Back"),
-        ])
-        choice = ui.prompt("Select")
-        if choice == "1":
-            try:
-                feature.install()
-                log.success(f"{feature.name} enabled.")
-            except Exception as e:
-                log.error(f"Failed: {e}")
-        elif choice == "2":
-            feature.remove()
-            log.success(f"{feature.name} disabled.")
-        ui.pause()
-
+        while True:
+            from dashboard import ui
+            ui.clear()
+            ui.header("network acceleration hub", "optimize routing latency & bbr layers")
+            
+            is_active = optimizer.is_installed()
+            status_text = "ENABLED & OPTIMIZED" if is_active else "DISABLED (STOCK LINUX)"
+            status_color = "\033[1;32m" if is_active else "\033[1;31m"
+            
+            ui.kv_row("Current Profile Status", f"{status_color}{status_text}\033[0m")
+            
+            # FIXED: Removed capture_output=True
+            from core.shell import Shell
+            cc_res = Shell.run("sysctl net.ipv4.tcp_congestion_control", check=False)
+            ss_res = Shell.run("sysctl net.ipv4.tcp_slow_start_after_idle", check=False)
+            
+            cc = cc_res.stdout.strip() if cc_res.ok else "Unknown"
+            ss = ss_res.stdout.strip() if ss_res.ok else "Unknown"
+            
+            ui.kv_row("Kernel Alg", cc)
+            ui.kv_row("Slow Start Config", ss)
+            print()
+            
+            ui.menu([
+                ("1", "Apply Extreme Low-Latency Profile + BBR (3x-ui Optimization)"),
+                ("2", "Remove Optimizations (Reset to OS Default)"),
+                ("0", "Back to Main Menu")
+            ])
+            
+            action = ui.prompt("Select action")
+            if action == "0" or not action:
+                return
+            elif action == "1":
+                ui.clear()
+                ui.header("deploying acceleration parameters")
+                try:
+                    optimizer.install()
+                    ui.prompt("\nExecution complete. Press Enter to continue...")
+                except Exception as e:
+                    from core.logger import log
+                    log.error(f"Error during network tune: {e}")
+                    ui.prompt("\nPress Enter to continue...")
+            elif action == "2":
+                ui.clear()
+                ui.header("rolling back kernel overrides")
+                try:
+                    optimizer.remove()
+                    ui.prompt("\nRollback complete. Press Enter to continue...")
+                except Exception as e:
+                    from core.logger import log
+                    log.error(f"Error during rollback: {e}")
+                    ui.prompt("\nPress Enter to continue...")
+                    
     def _safe_live_stats(self):
         try:
             return self.monitor.live_stats(sample_seconds=0.3)
-        except Exception:
+        except Exception:  # noqa: BLE001 - the home screen must never crash
             return None
-
-    def _manage_adblock(self):
-        from dashboard.adblock import adblock_menu
-        adblock_menu()
 
 
 def main():

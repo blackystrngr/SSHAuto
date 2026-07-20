@@ -1,17 +1,15 @@
 """
-Single source of truth for every constant used across the project.
+Single source of truth for every constant used across the project, plus
+a tiny JSON-backed StateStore so features/dashboard can persist things
+(current dropbear port, custom ports, chosen cert strategy, domain...)
+without a database.
 """
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
-import requests
-
-# ----------------------------------------------------------------------
-# Project root – auto‑detect
-# ----------------------------------------------------------------------
-APP_ROOT = Path(__file__).resolve().parent.parent
 
 # ----------------------------------------------------------------------
 # Network layout
@@ -19,28 +17,24 @@ APP_ROOT = Path(__file__).resolve().parent.parent
 HTTP_PORTS = {80, 8080, 8880, 2052, 2082, 2086, 2095}
 HTTPS_PORTS = {443, 8443, 2053, 2083, 2087, 2096}
 
-SSH_PORT_DEFAULT = 22
-DROPBEAR_PORT_DEFAULT = 110
-PROXY_PORT_DEFAULT = 9955
-SQUID_PORT_DEFAULT = 3128
-
+SSH_PORT_DEFAULT = 22                 # real OpenSSH, direct access
+DROPBEAR_PORT_DEFAULT = 113           # dropbear tunnel backend
+PROXY_PORT_DEFAULT = 8000             # Python asyncio proxy (new relay)
 
 USER_GROUP = "sshauto-users"
 
+# Automation & polling timelines
+GIT_POLL_INTERVAL_SECONDS = 30        # 30-second automated check interval
 
 # ----------------------------------------------------------------------
-# Package Management
+# Package Management Requirements
 # ----------------------------------------------------------------------
-REQUIRED_PACKAGES = [
-    "nginx", "dropbear", "fail2ban", "iptables", "curl", "git",
-    "certbot", "squid", "sslh", "cron",
-    "build-essential", "libpcap-dev", "wget", "golang-go"
-]
-REMOVE_PACKAGES = ["apache2", "ufw", "firewalld"]
-PIP_PACKAGES = []
+REQUIRED_PACKAGES = ["nginx", "dropbear", "fail2ban", "iptables", "curl", "git"]
+REMOVE_PACKAGES = ["apache2"]          # Prevents port 80 binding conflicts
+PIP_PACKAGES = []                     # Handled directly via requirements.txt
 
 # ----------------------------------------------------------------------
-# Filesystem paths
+# Filesystem paths (all as specified / conventional Debian-family paths)
 # ----------------------------------------------------------------------
 NGINX_SITES_AVAILABLE = Path("/etc/nginx/sites-available")
 NGINX_SITES_ENABLED = Path("/etc/nginx/sites-enabled")
@@ -50,32 +44,17 @@ SSHD_CONFIG = Path("/etc/ssh/sshd_config")
 SSH_BANNER_PATH = Path("/etc/ssh/sshd_banner")
 DROPBEAR_BANNER_PATH = Path("/etc/dropbear/banner")
 DROPBEAR_DEFAULTS_FILE = Path("/etc/default/dropbear")
+APP_ROOT = Path("/opt/sshauto")
 SSHAUTO_CERT_DIR = Path("/var/lib/sshauto/certs")
 LETSENCRYPT_LIVE = Path("/etc/letsencrypt/live")
 
+# System tracking & runtime directories
 LOG_DIR = Path("/var/log/sshauto")
 SYSTEMD_DIR = Path("/etc/systemd/system")
 
+# Fail2ban service layouts
 FAIL2BAN_FILTER_DIR = Path("/etc/fail2ban/filter.d")
 FAIL2BAN_JAIL_LOCAL = Path("/etc/fail2ban/jail.local")
-
-SERVER_IP_DEFAULT = "your_server_ip"
-
-def get_public_ip() -> str:
-    """Auto‑detect the server's public IPv4 address."""
-    try:
-        ip = requests.get('https://api.ipify.org', timeout=5).text.strip()
-        if ip:
-            return ip
-    except Exception:
-        pass
-    try:
-        ip = requests.get('https://ifconfig.me/ip', timeout=5).text.strip()
-        if ip:
-            return ip
-    except Exception:
-        pass
-    return SERVER_IP_DEFAULT
 
 
 class StateStore:
@@ -115,14 +94,11 @@ class StateStore:
             "ssh_port": SSH_PORT_DEFAULT,
             "dropbear_port": DROPBEAR_PORT_DEFAULT,
             "proxy_port": PROXY_PORT_DEFAULT,
-            "squid_port": SQUID_PORT_DEFAULT,
-            "server_ip": get_public_ip(),
             "custom_http_ports": [],
             "custom_https_ports": [],
             "cert_strategy": None,
-            "cert_domain": "hi.blackstrngr.qzz.io",
+            "cert_domain": None,
             "installed_features": [],
-            "enable_bbr": False,
             "created_at": None,
         }
 

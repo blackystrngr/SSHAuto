@@ -1,5 +1,7 @@
 """
-Every shell-out in this project goes through Shell.run().
+Every shell-out in this project goes through Shell.run() so we get one
+consistent error-handling, retry, timeout, and dry-run policy everywhere
+instead of forty slightly different subprocess.run() calls.
 """
 from __future__ import annotations
 
@@ -26,6 +28,8 @@ class CmdResult:
 
 
 class Shell:
+    """Thin, defensive wrapper around subprocess with retry/backoff."""
+
     dry_run: bool = False
 
     @classmethod
@@ -80,6 +84,7 @@ class Shell:
 
     @staticmethod
     def exists(binary: str) -> bool:
+        """True if `binary` is on PATH."""
         return shutil.which(binary) is not None
 
     @staticmethod
