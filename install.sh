@@ -20,10 +20,7 @@ if ! grep -qiE 'debian|ubuntu' /etc/os-release 2>/dev/null; then
     exit 1
 fi
 
-# ---- 1. FULL IPTABLES FLUSH ----
-c_cyan "==> Flushing all iptables rules (filter, nat, mangle, raw)..."
 
-c_green "iptables flushed and default policies set to ACCEPT."
 
 
 
