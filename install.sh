@@ -69,7 +69,7 @@ fi
 
 c_cyan "==> Installing Python dependencies from requirements.txt"
 if [[ -f "${APP_ROOT}/requirements.txt" ]]; then
-    pip3 install --break-system-packages --upgrade -r "${APP_ROOT}/requirements.txt"
+    pip3 install -r "${APP_ROOT}/requirements.txt"
 else
     c_red "Warning: requirements.txt not found in ${APP_ROOT}"
 fi
