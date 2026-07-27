@@ -1,7 +1,13 @@
+"""
+BaseFeature is the contract every plugin must follow.
+"""
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+
 from core.logger import log
+
 
 @dataclass
 class FeatureStatus:
@@ -10,18 +16,27 @@ class FeatureStatus:
     healthy: bool
     detail: str = ""
 
+
 class BaseFeature(ABC):
     name: str = "unnamed"
     description: str = ""
     depends_on: list[str] = field(default_factory=list)
     idempotent: bool = True
 
+    def __repr__(self):
+        return f"<Feature {self.name}>"
+
     @abstractmethod
-    def is_installed(self) -> bool: ...
+    def is_installed(self) -> bool:
+        pass
+
     @abstractmethod
-    def install(self) -> None: ...
+    def install(self) -> None:
+        pass
+
     @abstractmethod
-    def remove(self) -> None: ...
+    def remove(self) -> None:
+        pass
 
     def status(self) -> FeatureStatus:
         try:
@@ -33,12 +48,13 @@ class BaseFeature(ABC):
     def safe_install(self) -> bool:
         try:
             log.rule(self.name)
-            log.info(self.description or self.name)
+            log.info(f"{self.description or self.name}")
             self.install()
             log.success(f"{self.name} ready")
             return True
         except Exception as exc:
             log.error(f"{self.name} failed: {exc}")
-            if hasattr(exc, "hint") and exc.hint:
-                log.warning(exc.hint)
+            hint = getattr(exc, "hint", None)
+            if hint:
+                log.warning(hint)
             return False
