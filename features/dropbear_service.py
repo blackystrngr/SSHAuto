@@ -16,12 +16,20 @@ class DropbearServiceFeature(BaseFeature):
         data = state.ensure_defaults()
         port = data.get("dropbear_port", DROPBEAR_PORT_DEFAULT)
 
+        # Generate host keys to avoid warnings
+        key_dir = Path("/etc/dropbear")
+        key_dir.mkdir(parents=True, exist_ok=True)
+        for key_type in ("rsa", "ecdsa", "ed25519"):
+            key_file = key_dir / f"dropbear_{key_type}_host_key"
+            if not key_file.exists():
+                Shell.run(f"dropbearkey -t {key_type} -f {key_file}", check=False)
+
         DROPBEAR_BANNER_PATH.write_text("Authorized Tunnel Access Only.\n")
         config = f"""NO_START=0
 DROPBEAR_PORT={port}
-DROPBEAR_EXTRA_ARGS="-p 127.0.0.1:{port} -b {DROPBEAR_BANNER_PATH} -W 65536"
+DROPBEAR_EXTRA_ARGS="-b {DROPBEAR_BANNER_PATH} -W 524288 -K 15 -I 0"
 DROPBEAR_BANNER="{DROPBEAR_BANNER_PATH}"
-DROPBEAR_RECEIVE_WINDOW=65536
+DROPBEAR_RECEIVE_WINDOW=524288
 """
         DROPBEAR_DEFAULTS_FILE.write_text(config)
         log.info(f"Dropbear defaults written (port {port})")
@@ -31,13 +39,18 @@ DROPBEAR_RECEIVE_WINDOW=65536
 
         service_content = f"""[Unit]
 Description=Dropbear SSH Tunnel Backend
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-ExecStart=/usr/sbin/dropbear -F -p 127.0.0.1:{port} -W 65536 -b {DROPBEAR_BANNER_PATH}
+ExecStart=/usr/sbin/dropbear -F -p 127.0.0.1:{port} -W 524288 -K 15 -I 0 -b {DROPBEAR_BANNER_PATH}
 Restart=always
-RestartSec=3
+RestartSec=1
 User=root
+LimitNOFILE=65536
+Nice=-10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=0
 
 [Install]
 WantedBy=multi-user.target
