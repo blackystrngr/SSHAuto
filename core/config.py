@@ -92,6 +92,8 @@ class StateStore:
             "cert_fullchain_path": None,
             "cert_key_path": None,
             "installed_features": [],
+            "squid_user": SQUID_USER_DEFAULT,
+            "squid_password": SQUID_PASSWORD_DEFAULT,
             "created_at": None,
         }
 
