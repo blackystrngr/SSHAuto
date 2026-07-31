@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sshauto bootstrap installer – no DNS modifications.
+# sshauto bootstrap installer – NO DNS modifications.
 set -euo pipefail
 
 REPO_URL="${SSHAUTO_REPO_URL:-https://github.com/blackystrngr/sshauto.git}"
