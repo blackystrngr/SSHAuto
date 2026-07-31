@@ -15,7 +15,7 @@ def find_available_port(start_port=9955, max_tries=10):
     for port in range(start_port, start_port + max_tries):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
-                s.bind(('127.0.0.1', port))
+                s.bind(('0.0.0.0', port))
                 return port
             except OSError:
                 continue
@@ -111,6 +111,7 @@ async def pipe(src, dst, direction=""):
 async def handle_client(reader, writer):
     peername = writer.get_extra_info('peername')
     logging.info(f"New connection from {{peername}}")
+
     sock = writer.get_extra_info('socket')
     if sock:
         tune_socket(sock)
@@ -238,7 +239,7 @@ async def handle_websocket(reader, writer):
 
 async def main():
     server = await asyncio.start_server(
-        handle_client, '127.0.0.1', PROXY_PORT,
+        handle_client, '0.0.0.0', PROXY_PORT,
         backlog=256,
         reuse_address=True,
     )
@@ -246,7 +247,7 @@ async def main():
         tune_socket(s)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-    logging.info(f"Proxy listening on 127.0.0.1:{{PROXY_PORT}} (uvloop: {{uvloop_used}})")
+    logging.info(f"Proxy listening on 0.0.0.0:{{PROXY_PORT}} (uvloop: {{uvloop_used}})")
     async with server:
         await server.serve_forever()
 
@@ -306,7 +307,7 @@ WantedBy=multi-user.target
     def _port_available(self, port: int) -> bool:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
-                s.bind(('127.0.0.1', port))
+                s.bind(('0.0.0.0', port))
                 return True
             except OSError:
                 return False
