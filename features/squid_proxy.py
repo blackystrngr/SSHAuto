@@ -44,3 +44,9 @@ request_header_access X-Forwarded-For deny all
             log.success("Squid proxy running on port 3128 (no auth).")
         else:
             log.warning("Squid service not active.")
+
+    def remove(self) -> None:
+        Shell.run("systemctl stop squid", check=False)
+        Shell.run("systemctl disable squid", check=False)
+        SQUID_CONF.unlink(missing_ok=True)
+        log.info("Squid removed.")
