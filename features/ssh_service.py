@@ -17,6 +17,8 @@ HARDENING_DIRECTIVES = {
     "ClientAliveCountMax": "3",
     "MaxAuthTries": "4",
     "LoginGraceTime": "20",
+    # In HARDENING_DIRECTIVES, add:
+    "UseDNS": "no",
 }
 
 class SSHServiceFeature(BaseFeature):
