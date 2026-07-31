@@ -7,7 +7,6 @@ SERVICES = [
     "nginx",
     "dropbear-tunnel",
     "ws-ssh-proxy",
-    "squid",
 ]
 
 def service_exists(service: str) -> bool:
