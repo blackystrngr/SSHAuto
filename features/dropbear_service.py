@@ -16,7 +16,7 @@ class DropbearServiceFeature(BaseFeature):
         data = state.ensure_defaults()
         port = data.get("dropbear_port", DROPBEAR_PORT_DEFAULT)
 
-        # Generate host keys to avoid warnings
+        # Generate host keys
         key_dir = Path("/etc/dropbear")
         key_dir.mkdir(parents=True, exist_ok=True)
         for key_type in ("rsa", "ecdsa", "ed25519"):
@@ -37,13 +37,15 @@ DROPBEAR_RECEIVE_WINDOW=524288
         Shell.run("pkill -f dropbear", check=False)
         time.sleep(1)
 
+        # Bind to both 127.0.0.1:110 (for proxy) AND 0.0.0.0:2222 (for direct SSH)
+        public_ssh_port = data.get("public_ssh_port", 2222)
         service_content = f"""[Unit]
 Description=Dropbear SSH Tunnel Backend
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/sbin/dropbear -F -p 127.0.0.1:{port} -W 524288 -K 15 -I 0 -b {DROPBEAR_BANNER_PATH}
+ExecStart=/usr/sbin/dropbear -F -p 127.0.0.1:{port} -p 0.0.0.0:{public_ssh_port} -W 524288 -K 15 -I 0 -b {DROPBEAR_BANNER_PATH}
 Restart=always
 RestartSec=1
 User=root
@@ -57,13 +59,14 @@ WantedBy=multi-user.target
 """
         service_path = Path("/etc/systemd/system/dropbear-tunnel.service")
         service_path.write_text(service_content)
-        log.info("Created systemd unit: dropbear-tunnel.service")
+        log.info(f"Created systemd unit: dropbear-tunnel.service (listening on {public_ssh_port} for direct SSH)")
 
         Shell.run("systemctl daemon-reload", timeout=10)
         Shell.run("systemctl enable dropbear-tunnel", check=False, timeout=10)
         Shell.run("systemctl restart dropbear-tunnel", check=False, timeout=10)
 
         self._verify_binding(port)
+        log.important(f"Direct SSH is now available on port {public_ssh_port} (use ssh -p {public_ssh_port} user@server)")
 
     def remove(self) -> None:
         Shell.run("systemctl stop dropbear-tunnel", check=False, timeout=10)
