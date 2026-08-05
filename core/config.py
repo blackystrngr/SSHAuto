@@ -16,8 +16,7 @@ SSH_PORT_DEFAULT = 22
 DROPBEAR_PORT_DEFAULT = 110
 PROXY_PORT_DEFAULT = 9955
 SQUID_PORT_DEFAULT = 3128
-SQUID_USER_DEFAULT = "admin"
-SQUID_PASSWORD_DEFAULT = "neverhaveit"  
+PUBLIC_SSH_PORT_DEFAULT = 2222 
 
 USER_GROUP = "sshauto-users"
 
@@ -92,8 +91,7 @@ class StateStore:
             "cert_fullchain_path": None,
             "cert_key_path": None,
             "installed_features": [],
-            "squid_user": SQUID_USER_DEFAULT,
-            "squid_password": SQUID_PASSWORD_DEFAULT,
+            "public_ssh_port": PUBLIC_SSH_PORT_DEFAULT,
             "created_at": None,
         }
 
