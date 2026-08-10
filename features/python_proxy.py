@@ -108,6 +108,46 @@ async def pipe(src, dst, direction=""):
     finally:
         dst.close()
 
+async def handle_raw_ssh(reader, writer, first_line):
+    """Handle raw SSH connection: connect to Dropbear and pipe data."""
+    logging.info("Detected raw SSH – connecting to Dropbear")
+    ssh_reader, ssh_writer = None, None
+    for attempt in range(3):
+        try:
+            ssh_reader, ssh_writer = await asyncio.wait_for(
+                asyncio.open_connection('127.0.0.1', DROPBEAR_PORT),
+                timeout=3.0
+            )
+            break
+        except Exception as e:
+            logging.warning(f"Dropbear attempt {{attempt+1}}/3 failed: {{e}}")
+            if attempt < 2:
+                await asyncio.sleep(0.5)
+    if not ssh_reader:
+        logging.error("Could not connect to Dropbear")
+        writer.close()
+        return
+
+    ssh_sock = ssh_writer.get_extra_info('socket')
+    if ssh_sock:
+        tune_socket(ssh_sock)
+
+    # Send the first line we already read (the SSH banner)
+    ssh_writer.write(first_line)
+    await ssh_writer.drain()
+
+    # Bidirectional pipe
+    try:
+        await asyncio.gather(
+            pipe(reader, ssh_writer, "client->ssh"),
+            pipe(ssh_reader, writer, "ssh->client")
+        )
+    except Exception as e:
+        logging.error(f"SSH tunnel error: {{e}}")
+    finally:
+        writer.close()
+        ssh_writer.close()
+
 async def handle_client(reader, writer):
     peername = writer.get_extra_info('peername')
     logging.info(f"New connection from {{peername}}")
@@ -116,6 +156,7 @@ async def handle_client(reader, writer):
     if sock:
         tune_socket(sock)
 
+    # Read first line (HTTP request line or SSH banner)
     try:
         first_line = await reader.readline()
     except Exception:
@@ -125,13 +166,26 @@ async def handle_client(reader, writer):
         writer.close()
         return
 
-    parts = first_line.decode().strip().split()
-    if len(parts) < 3:
+    # --- Protocol detection ---
+    # 1. Raw SSH: starts with "SSH-"
+    if first_line.startswith(b'SSH-'):
+        await handle_raw_ssh(reader, writer, first_line)
+        return
+
+    # 2. HTTP request (method, target, version)
+    try:
+        parts = first_line.decode().strip().split()
+        if len(parts) < 3:
+            writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
+            writer.close()
+            return
+        method, raw_target, version = parts[0], parts[1], parts[2]
+    except Exception:
         writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
         writer.close()
         return
-    method, raw_target, version = parts[0], parts[1], parts[2]
 
+    # Read headers
     headers = {{}}
     while True:
         line = await reader.readline()
@@ -140,12 +194,14 @@ async def handle_client(reader, writer):
         key, value = line.decode().strip().split(':', 1)
         headers[key.lower()] = value.strip()
 
+    # --- 3. WebSocket upgrade ---
     upgrade = headers.get('upgrade', '').lower()
     if upgrade == 'websocket':
         logging.info(f"WebSocket upgrade from {{peername}} (method: {{method}})")
         await handle_websocket(reader, writer)
         return
 
+    # --- 4. CONNECT ---
     if method.upper() == 'CONNECT':
         if ':' not in raw_target:
             writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
@@ -162,6 +218,7 @@ async def handle_client(reader, writer):
         await handle_connect(reader, writer, host, port)
         return
 
+    # --- 5. Unknown ---
     writer.write(b'HTTP/1.1 405 Method Not Allowed\\r\\n\\r\\n')
     writer.close()
     logging.info(f"Unsupported request from {{peername}}")
@@ -204,7 +261,7 @@ async def handle_websocket(reader, writer):
     writer.write(b'\\r\\n')
     await writer.drain()
 
-    ssh_reader = ssh_writer = None
+    ssh_reader, ssh_writer = None, None
     for attempt in range(3):
         try:
             ssh_reader, ssh_writer = await asyncio.wait_for(
@@ -217,7 +274,7 @@ async def handle_websocket(reader, writer):
             if attempt < 2:
                 await asyncio.sleep(0.5)
     if not ssh_reader:
-        logging.error("Could not connect to Dropbear after 3 attempts")
+        logging.error("Could not connect to Dropbear")
         writer.close()
         return
 
@@ -247,7 +304,7 @@ async def main():
         tune_socket(s)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-    logging.info(f"Proxy listening on 0.0.0.0:{{PROXY_PORT}} (uvloop: {{uvloop_used}})")
+    logging.info(f"Proxy listening on 0.0.0.0:{{PROXY_PORT}} (uvloop: {{uvloop_used}}) – supports WebSocket, raw SSH, and CONNECT")
     async with server:
         await server.serve_forever()
 
@@ -258,7 +315,7 @@ if __name__ == '__main__':
         PROXY_BIN.chmod(0o755)
 
         service_content = f"""[Unit]
-Description=Unified Proxy (WebSocket + CONNECT)
+Description=Smart Proxy (WebSocket + SSH + CONNECT)
 After=network.target dropbear-tunnel.service
 Wants=dropbear-tunnel.service
 
@@ -294,7 +351,7 @@ WantedBy=multi-user.target
             log.error(f"Proxy is not active: {status.stdout}")
             raise Exception("Proxy not active")
 
-        log.success(f"Proxy installed on port {proxy_port} (aggressive keepalive)")
+        log.success(f"Smart proxy installed on port {proxy_port} (supports WebSocket, raw SSH, CONNECT)")
 
     def remove(self) -> None:
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
