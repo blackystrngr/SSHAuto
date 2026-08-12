@@ -55,6 +55,7 @@ import logging
 import time
 import sys
 from pathlib import Path
+import urllib.parse
 
 try:
     import uvloop
@@ -107,6 +108,79 @@ async def pipe(src, dst, direction=""):
     finally:
         dst.close()
 
+async def handle_http_forward(reader, writer, method, raw_target, headers, first_line):
+    """Forward plain HTTP request to the target from Host header."""
+    host_header = headers.get('host')
+    if not host_header:
+        writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
+        writer.close()
+        return
+
+    # Parse host:port (default port 80 if none)
+    if ':' in host_header:
+        host, port_str = host_header.rsplit(':', 1)
+        try:
+            port = int(port_str)
+        except ValueError:
+            port = 80
+    else:
+        host = host_header
+        port = 80
+
+    logging.info(f"Forwarding HTTP request to {{host}}:{{port}} (method: {{method}})")
+
+    try:
+        target_reader, target_writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port),
+            timeout=10.0
+        )
+    except Exception as e:
+        logging.error(f"Forward connection failed: {{e}}")
+        writer.write(b'HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n')
+        await writer.drain()
+        writer.close()
+        return
+
+    # Send the original request (first line + headers + body)
+    target_writer.write(first_line)
+    for key, value in headers.items():
+        # Rebuild headers (skip Host and Connection? We'll keep them)
+        target_writer.write(f"{{key}}: {{value}}\\r\\n".encode())
+    target_writer.write(b'\\r\\n')
+
+    # If there is a request body, read and forward it (we need to read it first)
+    # For simplicity, we assume no body or we pipe the rest of the client stream
+    # The client may have already sent the body, so we'll pipe remaining data.
+    async def client_to_target():
+        try:
+            while True:
+                data = await reader.read(READ_CHUNK)
+                if not data:
+                    break
+                target_writer.write(data)
+                await target_writer.drain()
+        except Exception:
+            pass
+
+    async def target_to_client():
+        try:
+            while True:
+                data = await target_reader.read(READ_CHUNK)
+                if not data:
+                    break
+                writer.write(data)
+                await writer.drain()
+        except Exception:
+            pass
+
+    try:
+        await asyncio.gather(client_to_target(), target_to_client())
+    except Exception as e:
+        logging.error(f"HTTP forward error: {{e}}")
+    finally:
+        writer.close()
+        target_writer.close()
+
 async def handle_client(reader, writer):
     peername = writer.get_extra_info('peername')
     logging.info(f"New connection from {{peername}}")
@@ -124,14 +198,14 @@ async def handle_client(reader, writer):
         writer.close()
         return
 
-    # --- Only HTTP requests are allowed ---
-    # If it doesn't look like an HTTP request, reject it immediately
-    if not first_line.startswith(b'GET') and not first_line.startswith(b'POST') and not first_line.startswith(b'CONNECT') and not first_line.startswith(b'PACTH'):
+    # --- Reject raw SSH ---
+    if first_line.startswith(b'SSH-'):
         writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
         writer.close()
-        logging.info(f"Rejected non-HTTP request from {{peername}}")
+        logging.info(f"Rejected raw SSH from {{peername}}")
         return
 
+    # --- Parse HTTP request ---
     try:
         parts = first_line.decode().strip().split()
         if len(parts) < 3:
@@ -152,12 +226,14 @@ async def handle_client(reader, writer):
         key, value = line.decode().strip().split(':', 1)
         headers[key.lower()] = value.strip()
 
+    # --- WebSocket upgrade ---
     upgrade = headers.get('upgrade', '').lower()
     if upgrade == 'websocket':
         logging.info(f"WebSocket upgrade from {{peername}} (method: {{method}})")
         await handle_websocket(reader, writer)
         return
 
+    # --- CONNECT ---
     if method.upper() == 'CONNECT':
         if ':' not in raw_target:
             writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
@@ -174,10 +250,8 @@ async def handle_client(reader, writer):
         await handle_connect(reader, writer, host, port)
         return
 
-    # Reject all other methods (GET, POST, etc.)
-    writer.write(b'HTTP/1.1 405 Method Not Allowed\\r\\n\\r\\n')
-    writer.close()
-    logging.info(f"Unsupported HTTP method {{method}} from {{peername}}")
+    # --- Plain HTTP forward (GET, POST, etc.) ---
+    await handle_http_forward(reader, writer, method, raw_target, headers, first_line)
 
 async def handle_connect(reader, writer, host, port):
     try:
@@ -260,7 +334,7 @@ async def main():
         tune_socket(s)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-    logging.info(f"Proxy listening on 0.0.0.0:{{PROXY_PORT}} (uvloop: {{uvloop_used}}) – WebSocket + CONNECT only")
+    logging.info(f"Proxy listening on 0.0.0.0:{{PROXY_PORT}} (uvloop: {{uvloop_used}}) – WebSocket, CONNECT, and HTTP forward")
     async with server:
         await server.serve_forever()
 
@@ -271,7 +345,7 @@ if __name__ == '__main__':
         PROXY_BIN.chmod(0o755)
 
         service_content = f"""[Unit]
-Description=Proxy (WebSocket + CONNECT only)
+Description=Universal Proxy (WebSocket + CONNECT + HTTP)
 After=network.target dropbear-tunnel.service
 Wants=dropbear-tunnel.service
 
@@ -307,7 +381,7 @@ WantedBy=multi-user.target
             log.error(f"Proxy is not active: {status.stdout}")
             raise Exception("Proxy not active")
 
-        log.success(f"Proxy installed on port {proxy_port} (WebSocket + CONNECT only)")
+        log.success(f"Universal proxy installed on port {proxy_port} (WebSocket, CONNECT, HTTP forward)")
 
     def remove(self) -> None:
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
