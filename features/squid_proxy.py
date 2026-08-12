@@ -52,12 +52,6 @@ request_header_access X-Forwarded-For deny all
         Shell.run("systemctl enable squid", check=False)
 
         for attempt in range(3):
-            result = Shell.run("systemctl restart squid", check=False, timeout=30)
-            if result.ok:
-                break
-            time.sleep(2)
-        else:
-            log.warning("Squid service did not start cleanly.")
 
         if Shell.run("systemctl is-active squid", check=False).ok:
             log.success("Squid proxy running on port 3128 (no auth).")
