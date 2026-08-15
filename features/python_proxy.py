@@ -46,6 +46,7 @@ class PythonProxyFeature(BaseFeature):
 
         LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+        # Install uvloop for maximum speed
         Shell.run("pip3 install uvloop --break-system-packages", check=False, timeout=30)
 
         proxy_code = f'''#!/usr/bin/env python3
@@ -55,7 +56,6 @@ import logging
 import time
 import sys
 from pathlib import Path
-import urllib.parse
 
 try:
     import uvloop
@@ -76,18 +76,24 @@ logging.info(f"Proxy starting, uvloop: {{uvloop_used}}")
 
 DROPBEAR_PORT = {dropbear_port}
 PROXY_PORT = {proxy_port}
-READ_CHUNK = 16384  # 16KB
+READ_CHUNK = 16384  # 16KB – good balance
 
 def tune_socket(sock):
+    """Apply aggressive but proven socket optimisations for low latency."""
     try:
+        # Disable Nagle – send immediately
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        # Enable quick ACK
+        sock.setsockopt(socket.IPPROTO_TCP, 12, 1)  # TCP_QUICKACK
+        # Moderate buffers – enough for speed, low memory
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
+        # Keepalive – prevents NAT timeouts
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 10)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
-        sock.setsockopt(socket.IPPROTO_TCP, 12, 1)  # TCP_QUICKACK
+        # User timeout – detect dead connections faster
         try:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT, 30000)
         except Exception:
@@ -116,7 +122,6 @@ async def handle_http_forward(reader, writer, method, raw_target, headers, first
         writer.close()
         return
 
-    # Parse host:port (default port 80 if none)
     if ':' in host_header:
         host, port_str = host_header.rsplit(':', 1)
         try:
@@ -141,16 +146,11 @@ async def handle_http_forward(reader, writer, method, raw_target, headers, first
         writer.close()
         return
 
-    # Send the original request (first line + headers + body)
     target_writer.write(first_line)
     for key, value in headers.items():
-        # Rebuild headers (skip Host and Connection? We'll keep them)
         target_writer.write(f"{{key}}: {{value}}\\r\\n".encode())
     target_writer.write(b'\\r\\n')
 
-    # If there is a request body, read and forward it (we need to read it first)
-    # For simplicity, we assume no body or we pipe the rest of the client stream
-    # The client may have already sent the body, so we'll pipe remaining data.
     async def client_to_target():
         try:
             while True:
@@ -198,14 +198,14 @@ async def handle_client(reader, writer):
         writer.close()
         return
 
-    # --- Reject raw SSH ---
+    # Reject raw SSH (starts with SSH-)
     if first_line.startswith(b'SSH-'):
         writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
         writer.close()
         logging.info(f"Rejected raw SSH from {{peername}}")
         return
 
-    # --- Parse HTTP request ---
+    # Parse HTTP request
     try:
         parts = first_line.decode().strip().split()
         if len(parts) < 3:
@@ -226,14 +226,14 @@ async def handle_client(reader, writer):
         key, value = line.decode().strip().split(':', 1)
         headers[key.lower()] = value.strip()
 
-    # --- WebSocket upgrade ---
+    # WebSocket upgrade
     upgrade = headers.get('upgrade', '').lower()
     if upgrade == 'websocket':
         logging.info(f"WebSocket upgrade from {{peername}} (method: {{method}})")
         await handle_websocket(reader, writer)
         return
 
-    # --- CONNECT ---
+    # CONNECT
     if method.upper() == 'CONNECT':
         if ':' not in raw_target:
             writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
@@ -250,7 +250,7 @@ async def handle_client(reader, writer):
         await handle_connect(reader, writer, host, port)
         return
 
-    # --- Plain HTTP forward (GET, POST, etc.) ---
+    # Plain HTTP forward (GET, POST, etc.)
     await handle_http_forward(reader, writer, method, raw_target, headers, first_line)
 
 async def handle_connect(reader, writer, host, port):
@@ -312,7 +312,7 @@ async def handle_websocket(reader, writer):
     if ssh_sock:
         tune_socket(ssh_sock)
 
-    logging.info(f"WebSocket tunnel established")
+    logging.info("WebSocket tunnel established")
     try:
         await asyncio.gather(
             pipe(reader, ssh_writer, "client->ssh"),
@@ -334,7 +334,7 @@ async def main():
         tune_socket(s)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-    logging.info(f"Proxy listening on 0.0.0.0:{{PROXY_PORT}} (uvloop: {{uvloop_used}}) – WebSocket, CONNECT, and HTTP forward")
+    logging.info(f"Proxy listening on 0.0.0.0:{{PROXY_PORT}} (uvloop: {{uvloop_used}}) – WebSocket, CONNECT, HTTP forward")
     async with server:
         await server.serve_forever()
 
@@ -344,6 +344,7 @@ if __name__ == '__main__':
         PROXY_BIN.write_text(proxy_code)
         PROXY_BIN.chmod(0o755)
 
+        # Systemd service – simple, robust
         service_content = f"""[Unit]
 Description=Universal Proxy (WebSocket + CONNECT + HTTP)
 After=network.target dropbear-tunnel.service
@@ -381,7 +382,7 @@ WantedBy=multi-user.target
             log.error(f"Proxy is not active: {status.stdout}")
             raise Exception("Proxy not active")
 
-        log.success(f"Universal proxy installed on port {proxy_port} (WebSocket, CONNECT, HTTP forward)")
+        log.success(f"Universal proxy installed on port {proxy_port} (fast, WebSocket + CONNECT + HTTP)")
 
     def remove(self) -> None:
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
