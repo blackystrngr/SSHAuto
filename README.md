@@ -20,7 +20,7 @@ client ─▶ CDN ─▶ nginx (HTTP/HTTPS relay ports) ─▶ Python proxy (127
 | Component | Role |
 |---|---|
 | nginx | Public entry point on all HTTP/HTTPS relay ports, catch-all `server_name`, no buffering |
-| Python proxy | Handles WebSocket upgrade, HTTP `CONNECT` and plain HTTP forwarding (systemd: `ws-ssh-proxy`) |
+| Python proxy | uvloop-based, loopback only. Handles WebSocket upgrade, HTTP `CONNECT` and plain HTTP forwarding (systemd: `ws-ssh-proxy`) |
 | Dropbear | Tunnel SSH backend, loopback only (systemd: `dropbear-tunnel`) |
 | OpenSSH | Direct admin access on its own port, with a random banner |
 | fail2ban | Jails for sshd and Dropbear |
@@ -43,7 +43,8 @@ Or from a clone:
 sudo python3 main.py install
 ```
 
-You will be asked for a domain and a certificate type. When it finishes, type `kk`.
+You will be asked for a domain and a certificate type. The installer then verifies the
+full tunnel path (nginx → proxy → Dropbear) and repairs what it can. When it finishes, type `kk`.
 
 ## Commands
 
@@ -51,6 +52,7 @@ You will be asked for a domain and a certificate type. When it finishes, type `k
 sudo python3 main.py install [--only a,b] [--force] [--quiet] [--skip-non-idempotent]
 sudo python3 main.py install --squid     # also install the optional Squid proxy
 sudo python3 main.py squid               # install/reconfigure Squid on its own
+sudo python3 main.py doctor              # verify tunnel end-to-end and auto-repair (--no-heal: check only)
 sudo python3 main.py status              # per-feature install status
 sudo python3 main.py cert                # re-run the certificate menu
 sudo python3 main.py uninstall           # best-effort teardown

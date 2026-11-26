@@ -14,7 +14,7 @@ def find_available_port(start_port=9955, max_tries=10):
     for port in range(start_port, start_port + max_tries):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
-                s.bind(('0.0.0.0', port))
+                s.bind(('127.0.0.1', port))
                 return port
             except OSError:
                 continue
@@ -45,7 +45,7 @@ class PythonProxyFeature(BaseFeature):
 
         LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-        Shell.run("pip3 install uvloop --break-system-packages", check=False, timeout=180)  # optional speedup
+        self._ensure_uvloop()
 
         proxy_code = f'''#!/usr/bin/env python3
 import asyncio
@@ -56,12 +56,7 @@ import sys
 from pathlib import Path
 import urllib.parse
 
-try:
-    import uvloop
-    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-    uvloop_used = True
-except ImportError:
-    uvloop_used = False
+import uvloop  # required: installer guarantees it
 
 LOG_DIR = Path("/var/log/sshauto")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -71,11 +66,13 @@ logging.basicConfig(
     level=logging.WARNING,
     format='%(asctime)s %(levelname)s %(message)s'
 )
-logging.info(f"Proxy starting, uvloop: {{uvloop_used}}")
+logging.info("Proxy starting (uvloop)")
 
 DROPBEAR_PORT = {dropbear_port}
 PROXY_PORT = {proxy_port}
-READ_CHUNK = 16384  # 16KB
+READ_CHUNK = 65536  # 64KB
+STREAM_LIMIT = 262144  # 256KB stream buffer
+BIND_HOST = "127.0.0.1"  # nginx is the only public listener
 
 def tune_socket(sock):
     try:
@@ -130,7 +127,7 @@ async def handle_http_forward(reader, writer, method, raw_target, headers, first
 
     try:
         target_reader, target_writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port),
+            asyncio.open_connection(host, port, limit=STREAM_LIMIT),
             timeout=10.0
         )
     except Exception as e:
@@ -222,8 +219,9 @@ async def handle_client(reader, writer):
         line = await reader.readline()
         if not line or line == b'\\r\\n':
             break
-        key, value = line.decode().strip().split(':', 1)
-        headers[key.lower()] = value.strip()
+        key, sep, value = line.decode(errors='replace').partition(':')
+        if sep:
+            headers[key.strip().lower()] = value.strip()
 
     # --- WebSocket upgrade ---
     upgrade = headers.get('upgrade', '').lower()
@@ -255,7 +253,7 @@ async def handle_client(reader, writer):
 async def handle_connect(reader, writer, host, port):
     try:
         ssh_reader, ssh_writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port),
+            asyncio.open_connection(host, port, limit=STREAM_LIMIT),
             timeout=10.0
         )
     except Exception as e:
@@ -294,7 +292,7 @@ async def handle_websocket(reader, writer):
     for attempt in range(3):
         try:
             ssh_reader, ssh_writer = await asyncio.wait_for(
-                asyncio.open_connection('127.0.0.1', DROPBEAR_PORT),
+                asyncio.open_connection('127.0.0.1', DROPBEAR_PORT, limit=STREAM_LIMIT),
                 timeout=3.0
             )
             break
@@ -325,20 +323,25 @@ async def handle_websocket(reader, writer):
 
 async def main():
     server = await asyncio.start_server(
-        handle_client, '0.0.0.0', PROXY_PORT,
-        backlog=256,
+        handle_client, BIND_HOST, PROXY_PORT,
+        limit=STREAM_LIMIT,
+        backlog=1024,
         reuse_address=True,
     )
     for s in server.sockets:
         tune_socket(s)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-    logging.info(f"Proxy listening on 0.0.0.0:{{PROXY_PORT}} (uvloop: {{uvloop_used}}) – WebSocket, CONNECT, and HTTP forward")
+    logging.info(f"Proxy listening on {{BIND_HOST}}:{{PROXY_PORT}} (uvloop) – WebSocket, CONNECT, and HTTP forward")
     async with server:
         await server.serve_forever()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    if hasattr(uvloop, 'run'):
+        uvloop.run(main())
+    else:
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+        asyncio.run(main())
 '''
         PROXY_BIN.write_text(proxy_code)
         PROXY_BIN.chmod(0o755)
@@ -390,10 +393,26 @@ WantedBy=multi-user.target
         Shell.run("systemctl daemon-reload", timeout=10)
         log.info("Python Proxy removed")
 
+    def _ensure_uvloop(self) -> None:
+        """uvloop is mandatory: try pip (new + old pip syntax), then apt."""
+        def have() -> bool:
+            return Shell.run("python3 -c 'import uvloop'", check=False, timeout=20).ok
+        if have():
+            return
+        log.info("Installing uvloop...")
+        for cmd in ("pip3 install -q uvloop --break-system-packages",
+                    "pip3 install -q uvloop",
+                    "DEBIAN_FRONTEND=noninteractive apt-get install -y python3-uvloop"):
+            Shell.run(cmd, check=False, timeout=300)
+            if have():
+                log.success("uvloop installed.")
+                return
+        raise Exception("uvloop could not be installed (tried pip and apt)")
+
     def _port_available(self, port: int) -> bool:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
-                s.bind(('0.0.0.0', port))
+                s.bind(('127.0.0.1', port))
                 return True
             except OSError:
                 return False

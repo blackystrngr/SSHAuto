@@ -20,3 +20,31 @@ def test_explicit_squid_pulls_dependencies():
     order = [f.name for f in m._ordered(["squid_proxy"])]
     assert order[-1] == "squid_proxy"
     assert {"packages", "firewall"} <= set(order)
+
+
+def test_dependents_skipped_and_failures_retried(monkeypatch):
+    import core.plugin_manager as pm
+    from features.base import BaseFeature
+
+    calls = {"a": 0, "b": 0}
+
+    class A(BaseFeature):
+        name = "a"
+        depends_on = []
+        def is_installed(self): return False
+        def install(self): calls["a"] += 1; raise RuntimeError("boom")
+        def remove(self): pass
+
+    class B(BaseFeature):
+        name = "b"
+        depends_on = ["a"]
+        def is_installed(self): return False
+        def install(self): calls["b"] += 1
+        def remove(self): pass
+
+    monkeypatch.setattr(pm.time, "sleep", lambda *_: None)
+    m = pm.PluginManager()
+    m._classes = {"a": A, "b": B}
+    results = m.install_all()
+    assert results == {"a": False, "b": False}
+    assert calls == {"a": 2, "b": 0}   # a retried once, b never attempted

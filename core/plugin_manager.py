@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+import time
 
 import features as features_pkg
 from core.exceptions import DependencyError
@@ -44,11 +45,25 @@ class PluginManager:
         results = {}
         wanted = list(only) if only else self.default_names()
         wanted += [n for n in include if n not in wanted]
+        failed: set[str] = set()
         for feature in self._ordered(wanted):
+            broken = [d for d in feature.depends_on if d in failed]
+            if broken:
+                log.error(f"{feature.name} skipped: dependency failed ({', '.join(broken)})")
+                results[feature.name] = False
+                failed.add(feature.name)
+                continue
             if not force and feature.is_installed():
                 log.info(f"{feature.name} already installed, skipping (use --force to overwrite)")
                 continue
-            results[feature.name] = feature.safe_install()
+            ok = feature.safe_install()
+            if not ok and feature.idempotent:
+                log.warning(f"retrying {feature.name} once...")
+                time.sleep(3)
+                ok = feature.safe_install()
+            results[feature.name] = ok
+            if not ok:
+                failed.add(feature.name)
         ok = sum(results.values())
         log.rule("summary")
         log.info(f"{ok}/{len(results)} features installed successfully")

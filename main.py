@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import __version__
+from core import __version__, doctor
 from core.config import state
 from core.exceptions import SSHAutoError
 from core.logger import log
@@ -85,6 +85,8 @@ def cmd_install(args):
     log.info("Reloading systemd and restarting services...")
     Shell.run("systemctl daemon-reload", check=False, timeout=10)
     restart_all_services()
+    if not args.only and not doctor.run(heal=True):
+        sys.exit(1)
 
 def _apply_squid_args(args):
     data = state.ensure_defaults()
@@ -105,6 +107,11 @@ def cmd_squid(args):
         return
     _apply_squid_args(args)
     if not feature.safe_install():
+        sys.exit(1)
+
+def cmd_doctor(args):
+    require_root()
+    if not doctor.run(heal=not args.no_heal):
         sys.exit(1)
 
 def cmd_status(args):
@@ -163,6 +170,9 @@ def build_parser():
     p.add_argument("--remove", action="store_true", help="disable Squid")
     _add_squid_opts(p)
     p.set_defaults(func=cmd_squid)
+    p = sub.add_parser("doctor", help="verify the tunnel end-to-end and repair it")
+    p.add_argument("--no-heal", action="store_true", help="check only, change nothing")
+    p.set_defaults(func=cmd_doctor)
     sub.add_parser("status", help="show install status").set_defaults(func=cmd_status)
     sub.add_parser("cert", help="run certificate wizard").set_defaults(func=cmd_cert)
     sub.add_parser("uninstall", help="best-effort teardown").set_defaults(func=cmd_uninstall)

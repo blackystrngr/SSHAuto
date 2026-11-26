@@ -27,7 +27,9 @@ class DropbearServiceFeature(BaseFeature):
                 Shell.run(f"dropbearkey -t {key_type} -f {key_file}", check=False)
 
         DROPBEAR_BANNER_PATH.write_text("Authorized Tunnel Access Only.\n")
-        config = f"""NO_START=0
+        # The tunnel runs from dropbear-tunnel.service (loopback only). The distro's own
+        # dropbear service must stay off, otherwise it grabs the port on 0.0.0.0 first.
+        config = f"""NO_START=1
 DROPBEAR_PORT={port}
 DROPBEAR_EXTRA_ARGS="-b {DROPBEAR_BANNER_PATH} -W 524288 -K 15 -I 0"
 DROPBEAR_BANNER="{DROPBEAR_BANNER_PATH}"
@@ -36,6 +38,9 @@ DROPBEAR_RECEIVE_WINDOW=524288
         DROPBEAR_DEFAULTS_FILE.write_text(config)
         log.info(f"Dropbear defaults written (port {port})")
 
+        for unit in ("dropbear.socket", "dropbear"):
+            Shell.run(f"systemctl disable --now {unit}", check=False, timeout=15)
+        Shell.run("systemctl mask dropbear", check=False, timeout=10)
         Shell.run("pkill -f dropbear", check=False)
         time.sleep(1)
 
