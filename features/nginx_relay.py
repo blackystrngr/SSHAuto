@@ -1,8 +1,15 @@
 from pathlib import Path
+
 from core.config import (
-    APP_ROOT, PROXY_PORT_DEFAULT, HTTP_PORTS, HTTPS_PORTS,
-    NGINX_SITES_AVAILABLE, NGINX_SITES_ENABLED, state,
-    LETSENCRYPT_LIVE, SSHAUTO_CERT_DIR
+    APP_ROOT,
+    HTTP_PORTS,
+    HTTPS_PORTS,
+    LETSENCRYPT_LIVE,
+    NGINX_SITES_AVAILABLE,
+    NGINX_SITES_ENABLED,
+    PROXY_PORT_DEFAULT,
+    SSHAUTO_CERT_DIR,
+    state,
 )
 from core.exceptions import ConfigError
 from core.logger import log
@@ -69,7 +76,7 @@ class NginxRelayFeature(BaseFeature):
                     if target.name != f"{NGINX_SITE_NAME}.conf":
                         log.info(f"Removing conflicting symlink: {site.name}")
                         site.unlink()
-                except:
+                except Exception:
                     pass
 
     def _render(self) -> str:

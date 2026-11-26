@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+
 class SSHAutoError(Exception):
     def __init__(self, message: str, *, hint: str | None = None):
         super().__init__(message)

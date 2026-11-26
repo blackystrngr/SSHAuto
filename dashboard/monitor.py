@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import time
 from dataclasses import dataclass
+
 from core.config import SSH_PORT_DEFAULT, state
 from core.shell import Shell
 from dashboard.users import UserManager
@@ -36,7 +38,7 @@ class Monitor:
         result = Shell.run(f"ss -tn state established '( {filter_expr} )'", check=False)
         if not result.ok:
             return 0
-        return len([l for l in result.stdout.splitlines()[1:] if l.strip()])
+        return len([ln for ln in result.stdout.splitlines()[1:] if ln.strip()])
 
     def _throughput(self, sample_seconds):
         iface = self._default_iface()

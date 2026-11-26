@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from core.config import FAIL2BAN_FILTER_DIR, FAIL2BAN_JAIL_LOCAL, SSH_PORT_DEFAULT, state
 from core.logger import log
 from core.shell import Shell

@@ -1,7 +1,8 @@
-from features.base import BaseFeature
-from core.shell import Shell
+from core.config import HTTP_PORTS, HTTPS_PORTS, SSH_PORT_DEFAULT, state
 from core.logger import log
-from core.config import state, HTTP_PORTS, HTTPS_PORTS, SSH_PORT_DEFAULT
+from core.shell import Shell
+from features.base import BaseFeature
+
 
 class FirewallFeature(BaseFeature):
     name = "firewall"

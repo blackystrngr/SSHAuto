@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-import shlex, shutil, subprocess, time
+import shlex
+import shutil
+import subprocess
+import time
 from dataclasses import dataclass
+
 from core.exceptions import ShellError
 from core.logger import log
+
 
 @dataclass
 class CmdResult:
@@ -34,7 +39,7 @@ class Shell:
                 if check and not result.ok:
                     raise ShellError(cmd_str, proc.returncode, proc.stderr)
                 return result
-            except subprocess.TimeoutExpired as exc:
+            except subprocess.TimeoutExpired:
                 last_error = ShellError(cmd_str, -1, f"timed out after {timeout}s")
             except ShellError as exc:
                 last_error = exc

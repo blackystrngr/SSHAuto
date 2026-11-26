@@ -1,9 +1,11 @@
 from __future__ import annotations
+
 from core.config import PIP_PACKAGES, REMOVE_PACKAGES, REQUIRED_PACKAGES
 from core.exceptions import PackageError
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
+
 
 class PackagesFeature(BaseFeature):
     name = "packages"

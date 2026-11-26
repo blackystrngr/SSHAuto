@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import sys
-import time
 import threading
+import time
+
 
 class Color:
     RESET = "\033[0m"

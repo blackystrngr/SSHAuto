@@ -1,12 +1,11 @@
-import os
 import socket
 import time
 from pathlib import Path
 
-from features.base import BaseFeature
-from core.shell import Shell
+from core.config import DROPBEAR_PORT_DEFAULT, LOG_DIR, PROXY_PORT_DEFAULT, state
 from core.logger import log
-from core.config import state, PROXY_PORT_DEFAULT, DROPBEAR_PORT_DEFAULT, LOG_DIR
+from core.shell import Shell
+from features.base import BaseFeature
 
 PROXY_BIN = Path("/usr/local/bin/ws_ssh_proxy.py")
 SERVICE_NAME = "ws-ssh-proxy.service"

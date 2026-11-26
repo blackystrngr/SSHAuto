@@ -2,6 +2,7 @@
 Interactive dashboard, launched by `kk`.
 """
 from __future__ import annotations
+
 from core.config import state
 from core.exceptions import SSHAutoError
 from core.logger import log
@@ -9,6 +10,7 @@ from dashboard import ui
 from dashboard.monitor import Monitor
 from dashboard.ports import PortManager
 from dashboard.users import UserManager
+
 
 class Dashboard:
     def __init__(self):
@@ -99,7 +101,7 @@ class Dashboard:
 
     def _list_users(self):
         ui.clear()
-        ui.header("users", f"group: sshauto-users")
+        ui.header("users", "group: sshauto-users")
         rows = [[u.username, u.expires, "locked" if u.locked else "active"]
                 for u in self.users.list()]
         ui.table(["username", "expires", "status"], rows)

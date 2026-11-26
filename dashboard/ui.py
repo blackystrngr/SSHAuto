@@ -1,6 +1,10 @@
 from __future__ import annotations
-import os, shutil
+
+import os
+import shutil
+
 from core.logger import Color
+
 
 def width():
     return shutil.get_terminal_size(fallback=(78, 24)).columns

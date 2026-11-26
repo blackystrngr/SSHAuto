@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import re
 from dataclasses import dataclass
+
 from core.config import USER_GROUP
 from core.exceptions import ValidationError
 from core.logger import log

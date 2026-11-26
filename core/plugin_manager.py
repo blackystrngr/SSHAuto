@@ -1,10 +1,13 @@
 from __future__ import annotations
-import importlib, pkgutil
-from typing import Type
+
+import importlib
+import pkgutil
+
 import features as features_pkg
 from core.exceptions import DependencyError
 from core.logger import log
 from features.base import BaseFeature
+
 
 class PluginManager:
     def __init__(self):

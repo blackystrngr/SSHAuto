@@ -12,12 +12,13 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from core import __version__
 from core.config import state
 from core.exceptions import SSHAutoError
 from core.logger import log
 from core.plugin_manager import PluginManager
-from core.shell import Shell
 from core.services import restart_all_services
+from core.shell import Shell
 
 BANNER = r"""
    _____ _____ _   _   ___         _
@@ -148,6 +149,7 @@ def _add_squid_opts(p):
 def build_parser():
     parser = argparse.ArgumentParser(prog="sshauto")
     parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("--version", action="version", version=f"sshauto {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("install", help="full automated setup")
     p.add_argument("--only", help="comma-separated features")

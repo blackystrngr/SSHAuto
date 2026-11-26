@@ -1,8 +1,10 @@
 from __future__ import annotations
+
 from core.config import HTTP_PORTS, HTTPS_PORTS, state
 from core.exceptions import ValidationError
 from core.logger import log
 from core.shell import Shell
+
 
 class PortManager:
     def add(self, port, kind):
