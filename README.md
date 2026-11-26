@@ -28,6 +28,7 @@ client ─▶ CDN ─▶ nginx (HTTP/HTTPS relay ports) ─▶ Python proxy (127
 | Certificates | Cloudflare Origin Certificate (15 years) or self-signed, chosen from an interactive menu |
 | udpgw | Optional UDP forwarding via badvpn-udpgw |
 | Squid | Optional authenticated proxy, see below |
+| Content filter | Optional DNS blocking of ads, malware, phishing and cryptominers for tunnel traffic, see below |
 
 ## Install
 
@@ -79,6 +80,42 @@ sudo python3 main.py squid --remove
 Change the default password before exposing the server. Credentials are stored in
 `/var/lib/sshauto/state.json` (mode 600).
 
+## Optional content filter
+
+Blocks ad, malware, phishing and cryptominer domains for everything that goes through the
+tunnel (SSH-over-WebSocket and the `CONNECT` proxy). Not installed by default.
+
+```bash
+sudo python3 main.py install --filter                  # with the rest, all four categories
+sudo python3 main.py filter                            # add/reconfigure on its own
+sudo python3 main.py filter --categories ads,phishing  # ads,malware,phishing,cryptominers | all | none
+sudo python3 main.py filter --allow example.com,b.org  # never block these (and their subdomains)
+sudo python3 main.py filter --block-private            # also block private/link-local networks
+sudo python3 main.py filter --status
+sudo python3 main.py filter --update                   # re-download the lists (manual, no timers)
+sudo python3 main.py filter --remove
+```
+
+| Category | Source | Entries (approx.) |
+|---|---|---|
+| ads | Block List Project `ads` | 234k |
+| malware | HaGeZi threat intelligence feeds (mini) | 164k |
+| phishing | Block List Project `phishing` | 190k |
+| cryptominers | Block List Project `crypto` + NoCoin | 1.5k |
+
+How it works: a loopback-only `dnsmasq` (`sshauto-dnsfilter`, `127.0.0.153`) answers NXDOMAIN for listed
+domains and their subdomains, and forwards everything else to the system's own resolvers. It is mounted over
+`/etc/resolv.conf` **only for `dropbear-tunnel` and `ws-ssh-proxy`** (systemd drop-ins), so the system DNS is
+never modified. With all categories enabled `dnsmasq` used about 53 MB RAM (measured, 589k domains); disable
+categories on a very small VPS.
+
+`--block-private` adds `IPAddressDeny` for RFC1918, link-local (cloud metadata at `169.254.169.254`),
+CGNAT and IPv6 ULA to the same two services, so tunnel users cannot reach your private network. Loopback is
+not blocked because the relay itself uses it.
+
+Limits: this is DNS filtering. A client that connects to an IP address directly, or uses its own DNS or
+DNS-over-HTTPS, is not filtered. The optional Squid proxy is not covered.
+
 ## The `kk` dashboard
 
 ```
@@ -94,7 +131,8 @@ Change the default password before exposing the server. Credentials are stored i
 ```
 main.py             CLI entry point
 install.sh          bootstrap installer for a fresh VPS
-core/               config + state store, logger, shell wrapper, exceptions, plugin manager
+core/               config + state store, logger, shell wrapper, exceptions, plugin manager,
+                    doctor (self-check/repair), uninstall, blocklists
 features/           one module per installable feature (auto-discovered)
 dashboard/          the `kk` menu: users, ports, monitor, UI helpers
 templates/          nginx config templates

@@ -8,7 +8,8 @@ import socket
 import time
 from dataclasses import dataclass
 
-from core.config import DROPBEAR_PORT_DEFAULT, PROXY_PORT_DEFAULT, state
+from core import blocklists
+from core.config import DROPBEAR_PORT_DEFAULT, PROXY_PORT_DEFAULT, SYSTEMD_DIR, state
 from core.logger import log
 from core.shell import Shell
 
@@ -80,6 +81,28 @@ def run_checks() -> list[Check]:
     checks.append(Check(f"ws proxy → dropbear (:{proxy_port})", ok, detail, "python_proxy"))
     ok, detail = ws_handshake("127.0.0.1", 80)
     checks.append(Check("nginx :80 → ws proxy → dropbear", ok, detail, "nginx_relay"))
+    checks.extend(_filter_checks())
+    return checks
+
+
+def _filter_checks() -> list[Check]:
+    """Only when the optional content filter is installed."""
+    if not (SYSTEMD_DIR / f"{blocklists.DNSFILTER_UNIT}.service").exists():
+        return []
+    fix = "content_filter"
+    unit = blocklists.DNSFILTER_UNIT
+    active = Shell.run(f"systemctl is-active {unit}", check=False, timeout=10).ok
+    checks = [Check(f"service {unit}", active, "" if active else "not active", fix)]
+    rc = blocklists.dns_rcode(blocklists.FILTER_ADDR, "cloudflare.com")
+    checks.append(Check("dns filter answers", rc is not None, "" if rc is not None else "no answer", fix))
+    sample = blocklists.sample_blocked_domain()
+    if sample:
+        rc = blocklists.dns_rcode(blocklists.FILTER_ADDR, sample)
+        checks.append(Check("dns filter blocks", rc == 3, "" if rc == 3 else f"{sample} rcode={rc}", fix))
+    for svc in ("dropbear-tunnel", "ws-ssh-proxy"):
+        shown = Shell.run(f"systemctl show -p BindReadOnlyPaths --value {svc}", check=False, timeout=10)
+        used = str(blocklists.RESOLV_CONF) in shown.stdout
+        checks.append(Check(f"{svc} uses filtered DNS", used, "" if used else "bind-mount missing", fix))
     return checks
 
 

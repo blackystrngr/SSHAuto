@@ -68,6 +68,9 @@ def cmd_install(args):
         only = [n for n in (only or manager.default_names()) if n not in NON_IDEMPOTENT]
     data = state.ensure_defaults()
     include = []
+    if args.filter:
+        _apply_filter_args(args)
+        include.append("content_filter")
     if args.squid:
         _apply_squid_args(args)
         include.append("squid_proxy")
@@ -114,6 +117,39 @@ def cmd_doctor(args):
     if not doctor.run(heal=not args.no_heal):
         sys.exit(1)
 
+def _apply_filter_args(args):
+    from core.blocklists import CATEGORIES
+    from core.exceptions import ValidationError
+    data = state.ensure_defaults()
+    if args.categories is not None:
+        raw = args.categories.strip().lower()
+        wanted = list(CATEGORIES) if raw == "all" else [] if raw in ("", "none") else \
+            [c.strip() for c in raw.split(",") if c.strip()]
+        bad = [c for c in wanted if c not in CATEGORIES]
+        if bad:
+            raise ValidationError(f"unknown categories: {', '.join(bad)}",
+                                  hint=f"choose from: {', '.join(CATEGORIES)}, all, none")
+        data["filter_categories"] = wanted
+    if args.allow is not None:
+        data["filter_allow"] = [d.strip().lower() for d in args.allow.split(",") if d.strip()]
+    if args.block_private is not None:
+        data["filter_private"] = args.block_private
+    state.save(data)
+
+def cmd_filter(args):
+    require_root()
+    feature = PluginManager().get("content_filter")
+    if args.remove:
+        feature.remove()
+    elif args.status:
+        print("\n".join(feature.summary()))
+    elif args.update:
+        feature.update()
+    else:
+        _apply_filter_args(args)
+        if not feature.safe_install():
+            sys.exit(1)
+
 def cmd_status(args):
     PluginManager().status_all()
 
@@ -148,6 +184,13 @@ def _add_squid_opts(p):
     p.add_argument("--squid-pass", help="squid password (default: didntgo1#)")
     p.add_argument("--squid-port", type=int, help="squid port (default: 3128)")
 
+def _add_filter_opts(p):
+    p.add_argument("--categories",
+                   help="comma list of ads,malware,phishing,cryptominers | all | none (default: all)")
+    p.add_argument("--allow", help="comma list of domains to never block (replaces the list)")
+    p.add_argument("--block-private", action=argparse.BooleanOptionalAction, default=None,
+                   help="block tunnel access to private/link-local networks (incl. cloud metadata)")
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="sshauto")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -160,11 +203,19 @@ def build_parser():
     p.add_argument("--force", action="store_true", help="overwrite all configs")
     p.add_argument("--squid", action="store_true", help="also install the optional Squid proxy")
     _add_squid_opts(p)
+    p.add_argument("--filter", action="store_true", help="also install the optional DNS content filter")
+    _add_filter_opts(p)
     p.set_defaults(func=cmd_install)
     p = sub.add_parser("squid", help="install/reconfigure the optional Squid proxy")
     p.add_argument("--remove", action="store_true", help="disable Squid")
     _add_squid_opts(p)
     p.set_defaults(func=cmd_squid)
+    p = sub.add_parser("filter", help="optional DNS content filter (ads/malware/phishing/cryptominers)")
+    _add_filter_opts(p)
+    p.add_argument("--status", action="store_true", help="show what is blocked")
+    p.add_argument("--update", action="store_true", help="re-download the blocklists")
+    p.add_argument("--remove", action="store_true", help="remove the filter")
+    p.set_defaults(func=cmd_filter)
     p = sub.add_parser("doctor", help="verify the tunnel end-to-end and repair it")
     p.add_argument("--no-heal", action="store_true", help="check only, change nothing")
     p.set_defaults(func=cmd_doctor)

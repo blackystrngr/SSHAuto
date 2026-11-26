@@ -12,12 +12,12 @@ from core.shell import Shell
 STATE_DIR = Path("/var/lib/sshauto")
 KK_LAUNCHER = Path("/usr/local/bin/kk")
 INSTALL_DIR = Path("/opt/sshauto")
-LEGACY_UNITS = ("ws-ssh-proxy", "sshauto-proxy", "dropbear-tunnel", "badvpn-udpgw")
+LEGACY_UNITS = ("ws-ssh-proxy", "sshauto-proxy", "dropbear-tunnel", "badvpn-udpgw", "sshauto-dnsfilter")
 PURGE_PACKAGES = ["nginx", "dropbear", "fail2ban", "squid"]
 
 PLAN = """This will remove everything sshauto created:
   - tunnel users (group '{group}') and their home directories{users_note}
-  - services: ws-ssh-proxy, dropbear-tunnel, badvpn-udpgw, optional Squid
+  - services: ws-ssh-proxy, dropbear-tunnel, badvpn-udpgw, optional Squid and DNS content filter
   - nginx relay site, fail2ban jails, OpenSSH hardening + banner (SSH port is left as is)
   - certificates, state ({state}), logs ({logs}), the 'kk' command{app_note}
   - custom relay port firewall rules (base ports stay open: other services may use them)
@@ -79,6 +79,9 @@ def run(*, yes: bool = False, purge_packages: bool = False, keep_users: bool = F
                      "/usr/local/bin/badvpn-udpgw"):
         Path(leftover).unlink(missing_ok=True)
     shutil.rmtree("/tmp/badvpn_src", ignore_errors=True)
+    shutil.rmtree("/etc/sshauto", ignore_errors=True)
+    for unit in ("dropbear-tunnel", "ws-ssh-proxy"):
+        shutil.rmtree(f"/etc/systemd/system/{unit}.service.d", ignore_errors=True)
     Shell.run("systemctl daemon-reload", check=False, timeout=10)
     Shell.run("systemctl reset-failed", check=False, timeout=10)
 

@@ -7,6 +7,11 @@
 - `optional` flag on features; `--version` flag.
 - Test suite, ruff, shellcheck, GitHub Actions CI, Makefile, pyproject.
 
+### Added (content filter)
+- Optional `content_filter` feature: DNS blocking of ads, malware, phishing and cryptominers for tunnel traffic (`install --filter`, `main.py filter`), per-category switches, allowlist, `--block-private` (RFC1918 / link-local / metadata), `--update`, `--status`, `--remove`.
+- Runs a loopback-only dnsmasq applied to `dropbear-tunnel` and `ws-ssh-proxy` through systemd drop-ins; system DNS is not modified.
+- `doctor` checks the filter (service, resolver answers, blocking works, tunnel services use it); `uninstall` removes it.
+
 ### Added (uninstall)
 - `main.py uninstall` removes everything sshauto built: tunnel users, services and units, nginx site, fail2ban jails, SSH hardening/banner, certificates, state, logs, `kk`, custom-port firewall rules, and `/opt/sshauto` when run from there. Asks for confirmation (`--yes` to skip). `--keep-users`, `--purge-packages` (nginx, dropbear, fail2ban, squid).
 - Safety: SSH port and base HTTP/HTTPS firewall rules are left alone; Squid is only touched if sshauto configured it; sshd config is validated (`sshd -t`) before restart and rolled back on error.
