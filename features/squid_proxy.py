@@ -1,82 +1,153 @@
 from __future__ import annotations
 
+import base64
+import glob
 import hashlib
+import shutil
 from pathlib import Path
+
+from core.config import (
+    SQUID_PASS_DEFAULT,
+    SQUID_PORT_DEFAULT,
+    SQUID_USER_DEFAULT,
+    state,
+)
+from core.exceptions import DependencyError, ValidationError
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
-import time
 
 SQUID_CONF = Path("/etc/squid/squid.conf")
-SQUID_BACKUP = SQUID_CONF.with_suffix(".conf.bak")
+SQUID_BACKUP = SQUID_CONF.with_suffix(".conf.sshauto-bak")
+SQUID_PASSWD = Path("/etc/squid/sshauto_passwd")
+MARKER = "# managed by sshauto"
+
+HELPER_GLOBS = [
+    "/usr/lib/squid/basic_ncsa_auth",
+    "/usr/lib/squid3/basic_ncsa_auth",
+    "/usr/lib*/squid*/basic_ncsa_auth",
+]
+
+
+def _find_helper() -> str:
+    for pattern in HELPER_GLOBS:
+        hits = glob.glob(pattern)
+        if hits:
+            return hits[0]
+    raise DependencyError("squid basic_ncsa_auth helper not found",
+                          hint="Is the 'squid' package installed correctly?")
+
+
+def _validate(user: str, password: str, port: int) -> None:
+    if not user or not password:
+        raise ValidationError("squid username and password cannot be empty")
+    for label, val in (("username", user), ("password", password)):
+        if any(c.isspace() for c in val):
+            raise ValidationError(f"squid {label} cannot contain whitespace")
+    if ":" in user:
+        raise ValidationError("squid username cannot contain ':'")
+    if not (1 <= port <= 65535):
+        raise ValidationError("squid port must be between 1 and 65535")
+
+
+def _htpasswd_line(user: str, password: str) -> str:
+    digest = base64.b64encode(hashlib.sha1(password.encode()).digest()).decode()
+    return f"{user}:{{SHA}}{digest}\n"
+
+
+def _fw_rule(action: str, port: int) -> None:
+    flag = {"add": "-I", "del": "-D"}[action]
+    present = Shell.run(f"iptables -C INPUT -p tcp --dport {port} -j ACCEPT", check=False).ok
+    if action == "add" and not present:
+        Shell.run(f"iptables {flag} INPUT -p tcp --dport {port} -j ACCEPT", check=False)
+    elif action == "del" and present:
+        Shell.run(f"iptables {flag} INPUT -p tcp --dport {port} -j ACCEPT", check=False)
 
 
 class SquidProxyFeature(BaseFeature):
     name = "squid_proxy"
-    description = "Install Squid proxy – no authentication, public"
+    description = "Squid proxy (optional) – username/password required"
     depends_on = ["packages", "firewall"]
+    optional = True
 
     def is_installed(self) -> bool:
-        return SQUID_CONF.exists() and Shell.run("systemctl is-active squid", check=False).ok
+        if not SQUID_CONF.exists() or MARKER not in SQUID_CONF.read_text():
+            return False
+        return Shell.run("systemctl is-active squid", check=False).ok
 
     def install(self) -> None:
-        log.info("Installing Squid proxy...")
-        Shell.run("apt-get install -y squid", check=True)
+        data = state.ensure_defaults()
+        user = data.get("squid_user") or SQUID_USER_DEFAULT
+        password = data.get("squid_pass") or SQUID_PASS_DEFAULT
+        port = int(data.get("squid_port") or SQUID_PORT_DEFAULT)
+        _validate(user, password, port)
 
-        # Minimal config (no auth)
-        config = """
-# Minimal Squid config – public CONNECT proxy
-http_port 0.0.0.0:3128
-acl SSL_ports port 1-65535
-acl CONNECT method CONNECT
-http_access allow CONNECT SSL_ports
-http_access allow all
+        log.info("Installing Squid proxy...")
+        Shell.run("DEBIAN_FRONTEND=noninteractive apt-get install -y squid",
+                  timeout=300, retries=1)
+        helper = _find_helper()
+
+        # password file (squid helper runs as user 'proxy')
+        SQUID_PASSWD.write_text(_htpasswd_line(user, password))
+        try:
+            shutil.chown(SQUID_PASSWD, "root", "proxy")
+        except (LookupError, OSError):
+            pass
+        SQUID_PASSWD.chmod(0o640)
+
+        check = Shell.run(f"{helper} {SQUID_PASSWD}", check=False, timeout=10,
+                          input_text=f"{user} {password}\n")
+        if "OK" not in check.stdout:
+            raise Exception(f"squid auth helper rejected the credentials: {check.stdout.strip()}")
+
+        config = f"""{MARKER} – do not edit by hand
+http_port 0.0.0.0:{port}
+
+auth_param basic program {helper} {SQUID_PASSWD}
+auth_param basic children 5
+auth_param basic realm Proxy
+auth_param basic credentialsttl 2 hours
+acl authed proxy_auth REQUIRED
+
+http_access allow authed
+http_access deny all
+
 cache deny all
 forwarded_for delete
-request_header_access X-Forwarded-For deny all
+via off
 """
-        # Check if config has changed
-        current_config = config.strip()
-        if SQUID_CONF.exists():
-            old_config = SQUID_CONF.read_text().strip()
-            if old_config == current_config:
-                log.info("Squid config unchanged – skipping restart.")
-                return
-            # Backup old config
-            SQUID_CONF.rename(SQUID_BACKUP)
-
-        # Write new config
+        # keep the distro's original config once
+        if SQUID_CONF.exists() and MARKER not in SQUID_CONF.read_text() and not SQUID_BACKUP.exists():
+            shutil.copy2(SQUID_CONF, SQUID_BACKUP)
+        previous = SQUID_CONF.read_text() if SQUID_CONF.exists() else None
         SQUID_CONF.write_text(config)
-        log.info("Squid config updated.")
 
-        # Test config
-        test = Shell.run("squid -k parse", check=False, timeout=10)
+        test = Shell.run("squid -k parse", check=False, timeout=20)
         if not test.ok:
             log.error(f"Squid config test failed: {test.stderr}")
-            # Restore backup if exists
-            if SQUID_BACKUP.exists():
-                SQUID_BACKUP.rename(SQUID_CONF)
+            if previous is not None:
+                SQUID_CONF.write_text(previous)
             raise Exception("Squid config invalid.")
 
-        # Restart only if it was running or config changed
-        if Shell.run("systemctl is-active squid", check=False).ok:
-            log.info("Restarting Squid to apply new config...")
-            Shell.run("systemctl restart squid", check=False, timeout=30)
-        else:
-            log.info("Starting Squid...")
-            Shell.run("systemctl start squid", check=False, timeout=30)
-
+        _fw_rule("add", port)
         Shell.run("systemctl enable squid", check=False)
+        Shell.run("systemctl restart squid", check=False, timeout=60)
 
-        # Verify
         if Shell.run("systemctl is-active squid", check=False).ok:
-            log.success("Squid running on port 3128 (no auth).")
+            log.success(f"Squid running on port {port} (auth required).")
+            log.important(f"Squid login: {user} / {password}")
         else:
-            log.warning("Squid not active. Check 'journalctl -u squid'.")
+            raise Exception("Squid not active. Check 'journalctl -u squid'.")
 
     def remove(self) -> None:
+        port = int(state.get("squid_port") or SQUID_PORT_DEFAULT)
         Shell.run("systemctl stop squid", check=False)
         Shell.run("systemctl disable squid", check=False)
-        SQUID_CONF.unlink(missing_ok=True)
-        SQUID_BACKUP.unlink(missing_ok=True)
-        log.info("Squid removed.")
+        _fw_rule("del", port)
+        if SQUID_BACKUP.exists():
+            shutil.copy2(SQUID_BACKUP, SQUID_CONF)
+            SQUID_BACKUP.unlink()
+        elif SQUID_CONF.exists() and MARKER in SQUID_CONF.read_text():
+            SQUID_CONF.unlink()
+        SQUID_PASSWD.unlink(missing_ok=True)
+        log.info("Squid proxy disabled (package left installed).")

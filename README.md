@@ -142,6 +142,18 @@ class MyThingFeature(BaseFeature):
     def remove(self) -> None: ...
 ```
 
+## Optional Squid proxy
+
+Not installed by default. Authentication is always on (default login
+`didntgo` / `didntgo1#`, port 3128).
+
+```bash
+sudo python3 main.py install --squid                       # with the rest
+sudo python3 main.py squid                                 # add/reconfigure on its own
+sudo python3 main.py squid --squid-user bob --squid-pass 's3cret' --squid-port 3128
+sudo python3 main.py squid --remove
+```
+
 ## Other useful commands
 
 ```bash

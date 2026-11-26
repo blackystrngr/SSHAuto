@@ -30,7 +30,7 @@ class PackagesFeature(BaseFeature):
 
     def _core_check_list(self):
         return ["nginx", "dropbear", "openssh-server", "fail2ban",
-                "certbot", "python3", "iptables", "git", "squid"]
+                "certbot", "python3", "iptables", "git"]
 
     def _dpkg_installed(self, pkg):
         result = Shell.run(f"dpkg -s {pkg}", check=False)

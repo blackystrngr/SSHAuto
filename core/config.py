@@ -16,13 +16,15 @@ SSH_PORT_DEFAULT = 22
 DROPBEAR_PORT_DEFAULT = 110
 PROXY_PORT_DEFAULT = 9955
 SQUID_PORT_DEFAULT = 3128
+SQUID_USER_DEFAULT = "didntgo"
+SQUID_PASS_DEFAULT = "didntgo1#"
 PUBLIC_SSH_PORT_DEFAULT = 2222 
 
 USER_GROUP = "sshauto-users"
 
 REQUIRED_PACKAGES = [
     "nginx", "dropbear", "fail2ban", "iptables", "curl", "git",
-    "certbot", "squid"
+    "certbot"
 ]
 REMOVE_PACKAGES = ["apache2", "ufw", "firewalld"]
 PIP_PACKAGES = []
@@ -68,6 +70,7 @@ class StateStore:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
             tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+            tmp.chmod(0o600)
             tmp.replace(self.path)
 
     def get(self, key: str, default=None):
@@ -84,6 +87,8 @@ class StateStore:
             "dropbear_port": DROPBEAR_PORT_DEFAULT,
             "proxy_port": PROXY_PORT_DEFAULT,
             "squid_port": SQUID_PORT_DEFAULT,
+            "squid_user": SQUID_USER_DEFAULT,
+            "squid_pass": SQUID_PASS_DEFAULT,
             "server_ip": SERVER_IP_DEFAULT,
             "custom_http_ports": [],
             "custom_https_ports": [],

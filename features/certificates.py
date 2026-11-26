@@ -137,7 +137,7 @@ class CertificatesFeature(BaseFeature):
         data.update({
             "cert_fullchain_path": cert_path,
             "cert_key_path": key_path,
-            "cert_issued_at": datetime.datetime.now(datetime.UTC).isoformat(),
+            "cert_issued_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         })
         state.save(data)
         from features.nginx_relay import NginxRelayFeature

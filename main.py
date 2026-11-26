@@ -64,12 +64,16 @@ def cmd_install(args):
     manager = PluginManager()
     only = args.only.split(",") if args.only else None
     if args.skip_non_idempotent:
-        only = [n for n in (only or manager.names()) if n not in NON_IDEMPOTENT]
+        only = [n for n in (only or manager.default_names()) if n not in NON_IDEMPOTENT]
     data = state.ensure_defaults()
+    include = []
+    if args.squid:
+        _apply_squid_args(args)
+        include.append("squid_proxy")
     if not data.get("created_at"):
-        data["created_at"] = datetime.datetime.now(datetime.UTC).isoformat()
+        data["created_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         state.save(data)
-    results = manager.install_all(only=only, force=args.force)
+    results = manager.install_all(only=only, force=args.force, include=include)
     if not args.quiet and not args.skip_non_idempotent:
         _install_kk_command()
         log.rule("done")
@@ -80,6 +84,27 @@ def cmd_install(args):
     log.info("Reloading systemd and restarting services...")
     Shell.run("systemctl daemon-reload", check=False, timeout=10)
     restart_all_services()
+
+def _apply_squid_args(args):
+    data = state.ensure_defaults()
+    if args.squid_user:
+        data["squid_user"] = args.squid_user
+    if args.squid_pass:
+        data["squid_pass"] = args.squid_pass
+    if args.squid_port:
+        data["squid_port"] = args.squid_port
+    state.save(data)
+
+def cmd_squid(args):
+    require_root()
+    manager = PluginManager()
+    feature = manager.get("squid_proxy")
+    if args.remove:
+        feature.remove()
+        return
+    _apply_squid_args(args)
+    if not feature.safe_install():
+        sys.exit(1)
 
 def cmd_status(args):
     PluginManager().status_all()
@@ -115,6 +140,11 @@ def _install_kk_command():
     except OSError as exc:
         log.warning(f"could not install 'kk': {exc}")
 
+def _add_squid_opts(p):
+    p.add_argument("--squid-user", help="squid username (default: didntgo)")
+    p.add_argument("--squid-pass", help="squid password (default: didntgo1#)")
+    p.add_argument("--squid-port", type=int, help="squid port (default: 3128)")
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="sshauto")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -124,7 +154,13 @@ def build_parser():
     p.add_argument("--skip-non-idempotent", action="store_true")
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--force", action="store_true", help="overwrite all configs")
+    p.add_argument("--squid", action="store_true", help="also install the optional Squid proxy")
+    _add_squid_opts(p)
     p.set_defaults(func=cmd_install)
+    p = sub.add_parser("squid", help="install/reconfigure the optional Squid proxy")
+    p.add_argument("--remove", action="store_true", help="disable Squid")
+    _add_squid_opts(p)
+    p.set_defaults(func=cmd_squid)
     sub.add_parser("status", help="show install status").set_defaults(func=cmd_status)
     sub.add_parser("cert", help="run certificate wizard").set_defaults(func=cmd_cert)
     sub.add_parser("uninstall", help="best-effort teardown").set_defaults(func=cmd_uninstall)

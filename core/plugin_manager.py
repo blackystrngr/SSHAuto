@@ -19,6 +19,7 @@ class PluginManager:
                 if isinstance(attr, type) and issubclass(attr, BaseFeature) and attr is not BaseFeature:
                     self._classes[attr.name] = attr
     def names(self): return sorted(self._classes)
+    def default_names(self): return sorted(n for n, c in self._classes.items() if not c.optional)
     def get(self, name): return self._classes[name]()
     def _ordered(self, wanted=None):
         wanted = wanted or self.names()
@@ -36,9 +37,11 @@ class PluginManager:
         for n in wanted:
             visit(n)
         return [self.get(n) for n in resolved]
-    def install_all(self, only=None, force=False):
+    def install_all(self, only=None, force=False, include=()):
         results = {}
-        for feature in self._ordered(only):
+        wanted = list(only) if only else self.default_names()
+        wanted += [n for n in include if n not in wanted]
+        for feature in self._ordered(wanted):
             if not force and feature.is_installed():
                 log.info(f"{feature.name} already installed, skipping (use --force to overwrite)")
                 continue
@@ -53,7 +56,9 @@ class PluginManager:
     def status_all(self):
         for feature in self._ordered():
             s = feature.status()
-            if s.installed:
+            if not s.installed and feature.optional:
+                log.info(f"{s.name:<18} optional, not installed")
+            elif s.installed:
                 log.success(f"{s.name:<18} installed")
             else:
                 log.warning(f"{s.name:<18} not installed  {s.detail}")

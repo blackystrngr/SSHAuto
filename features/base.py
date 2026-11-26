@@ -1,6 +1,6 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from core.logger import log
 
 @dataclass
@@ -13,8 +13,9 @@ class FeatureStatus:
 class BaseFeature(ABC):
     name: str = "unnamed"
     description: str = ""
-    depends_on: list[str] = field(default_factory=list)
+    depends_on: list[str] = []
     idempotent: bool = True
+    optional: bool = False   # only installed when asked for
 
     @abstractmethod
     def is_installed(self) -> bool: ...
