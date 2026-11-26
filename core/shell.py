@@ -42,6 +42,8 @@ class Shell:
             if attempt <= retries:
                 log.warning(f"retry {attempt}/{retries}: {cmd_str}")
                 time.sleep(retry_delay)
+        if not check:
+            return CmdResult(cmd_str, -1, "", str(last_error))
         raise last_error
 
     @staticmethod

@@ -46,7 +46,7 @@ class PythonProxyFeature(BaseFeature):
 
         LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-        Shell.run("pip3 install uvloop --break-system-packages", check=False, timeout=30)
+        Shell.run("pip3 install uvloop --break-system-packages", check=False, timeout=180)  # optional speedup
 
         proxy_code = f'''#!/usr/bin/env python3
 import asyncio
