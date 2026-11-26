@@ -57,7 +57,7 @@ WantedBy=multi-user.target
 """
         Path("/etc/systemd/system/badvpn-udpgw.service").write_text(service_content)
 
-        Shell.run("systemctl daemon-reload", timeout=10)
+        Shell.run("systemctl daemon-reload", check=False, timeout=10)
         Shell.run("systemctl enable badvpn-udpgw", check=True)
         Shell.run("systemctl restart badvpn-udpgw", check=True)
 
@@ -69,5 +69,5 @@ WantedBy=multi-user.target
         Shell.run("systemctl disable badvpn-udpgw", check=False)
         Path("/etc/systemd/system/badvpn-udpgw.service").unlink(missing_ok=True)
         Path("/usr/local/bin/badvpn-udpgw").unlink(missing_ok=True)
-        Shell.run("systemctl daemon-reload", timeout=10)
+        Shell.run("systemctl daemon-reload", check=False, timeout=10)
         log.success("UDP Gateway removed.")

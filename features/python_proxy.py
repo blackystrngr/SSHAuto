@@ -366,7 +366,7 @@ WantedBy=multi-user.target
         service_path = Path(f"/etc/systemd/system/{SERVICE_NAME}")
         service_path.write_text(service_content)
 
-        Shell.run("systemctl daemon-reload", timeout=10)
+        Shell.run("systemctl daemon-reload", check=False, timeout=10)
         Shell.run(f"systemctl enable {SERVICE_NAME}", check=False, timeout=10)
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
         Shell.run(f"systemctl reset-failed {SERVICE_NAME}", check=False, timeout=10)
@@ -390,7 +390,7 @@ WantedBy=multi-user.target
         Shell.run(f"systemctl disable {SERVICE_NAME}", check=False, timeout=10)
         Path(f"/etc/systemd/system/{SERVICE_NAME}").unlink(missing_ok=True)
         PROXY_BIN.unlink(missing_ok=True)
-        Shell.run("systemctl daemon-reload", timeout=10)
+        Shell.run("systemctl daemon-reload", check=False, timeout=10)
         log.info("Python Proxy removed")
 
     def _ensure_uvloop(self) -> None:

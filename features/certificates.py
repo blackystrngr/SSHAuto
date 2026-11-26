@@ -1,4 +1,5 @@
 import datetime
+import shutil
 import time
 from pathlib import Path
 
@@ -149,4 +150,9 @@ class CertificatesFeature(BaseFeature):
         log.success("Certificate ready and applied to nginx.")
 
     def remove(self):
-        log.warning("Certificate removal is manual.")
+        data = state.load()
+        domain = data.get("cert_domain")
+        if domain and data.get("cert_strategy") == "cloudflare":
+            shutil.rmtree(LETSENCRYPT_LIVE / domain, ignore_errors=True)
+        shutil.rmtree(SSHAUTO_CERT_DIR, ignore_errors=True)
+        log.info("sshauto certificates removed.")

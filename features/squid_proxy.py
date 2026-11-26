@@ -140,6 +140,9 @@ via off
             raise Exception("Squid not active. Check 'journalctl -u squid'.")
 
     def remove(self) -> None:
+        ours = SQUID_PASSWD.exists() or (SQUID_CONF.exists() and MARKER in SQUID_CONF.read_text())
+        if not ours:
+            return
         port = int(state.get("squid_port") or SQUID_PORT_DEFAULT)
         Shell.run("systemctl stop squid", check=False)
         Shell.run("systemctl disable squid", check=False)

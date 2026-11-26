@@ -7,6 +7,10 @@
 - `optional` flag on features; `--version` flag.
 - Test suite, ruff, shellcheck, GitHub Actions CI, Makefile, pyproject.
 
+### Added (uninstall)
+- `main.py uninstall` removes everything sshauto built: tunnel users, services and units, nginx site, fail2ban jails, SSH hardening/banner, certificates, state, logs, `kk`, custom-port firewall rules, and `/opt/sshauto` when run from there. Asks for confirmation (`--yes` to skip). `--keep-users`, `--purge-packages` (nginx, dropbear, fail2ban, squid).
+- Safety: SSH port and base HTTP/HTTPS firewall rules are left alone; Squid is only touched if sshauto configured it; sshd config is validated (`sshd -t`) before restart and rolled back on error.
+
 ### Added (self-healing)
 - `main.py doctor`: tests services, Dropbear loopback binding, and a real WebSocket handshake through the proxy and through nginx (expects `101` + SSH banner); reinstalls broken features and re-checks. `--no-heal` to only check.
 - `install` runs `doctor` automatically at the end and exits non-zero if the tunnel is not working.

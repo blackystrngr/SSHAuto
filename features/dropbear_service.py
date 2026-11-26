@@ -67,7 +67,7 @@ WantedBy=multi-user.target
         service_path.write_text(service_content)
         log.info("Created systemd unit (Dropbear bound only to localhost).")
 
-        Shell.run("systemctl daemon-reload", timeout=10)
+        Shell.run("systemctl daemon-reload", check=False, timeout=10)
         Shell.run("systemctl enable dropbear-tunnel", check=False, timeout=10)
         Shell.run("systemctl restart dropbear-tunnel", check=False, timeout=10)
 
@@ -77,7 +77,9 @@ WantedBy=multi-user.target
         Shell.run("systemctl stop dropbear-tunnel", check=False, timeout=10)
         Shell.run("systemctl disable dropbear-tunnel", check=False, timeout=10)
         Path("/etc/systemd/system/dropbear-tunnel.service").unlink(missing_ok=True)
-        Shell.run("systemctl daemon-reload", timeout=10)
+        Shell.run("systemctl unmask dropbear", check=False, timeout=10)
+        DROPBEAR_BANNER_PATH.unlink(missing_ok=True)
+        Shell.run("systemctl daemon-reload", check=False, timeout=10)
         log.info("Dropbear removed")
 
     def _verify_binding(self, expected_port: int) -> None:

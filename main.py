@@ -124,13 +124,8 @@ def cmd_cert(args):
 
 def cmd_uninstall(args):
     require_root()
-    manager = PluginManager()
-    for name in reversed(manager.names()):
-        try:
-            manager.get(name).remove()
-            log.success(f"{name} removed")
-        except Exception as exc:
-            log.error(f"{name} teardown failed: {exc}")
+    from core import uninstall
+    uninstall.run(yes=args.yes, purge_packages=args.purge_packages, keep_users=args.keep_users)
 
 def cmd_dashboard(args):
     require_root()
@@ -175,7 +170,12 @@ def build_parser():
     p.set_defaults(func=cmd_doctor)
     sub.add_parser("status", help="show install status").set_defaults(func=cmd_status)
     sub.add_parser("cert", help="run certificate wizard").set_defaults(func=cmd_cert)
-    sub.add_parser("uninstall", help="best-effort teardown").set_defaults(func=cmd_uninstall)
+    p = sub.add_parser("uninstall", help="remove everything sshauto built")
+    p.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation")
+    p.add_argument("--keep-users", action="store_true", help="keep tunnel user accounts")
+    p.add_argument("--purge-packages", action="store_true",
+                   help="also apt-purge nginx, dropbear, fail2ban, squid")
+    p.set_defaults(func=cmd_uninstall)
     sub.add_parser("dashboard", help="open dashboard").set_defaults(func=cmd_dashboard)
     return parser
 

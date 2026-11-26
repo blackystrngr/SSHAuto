@@ -55,7 +55,8 @@ sudo python3 main.py squid               # install/reconfigure Squid on its own
 sudo python3 main.py doctor              # verify tunnel end-to-end and auto-repair (--no-heal: check only)
 sudo python3 main.py status              # per-feature install status
 sudo python3 main.py cert                # re-run the certificate menu
-sudo python3 main.py uninstall           # best-effort teardown
+sudo python3 main.py uninstall           # remove everything sshauto built (asks first)
+sudo python3 main.py uninstall --yes --keep-users --purge-packages   # flags: skip prompt / keep accounts / apt-purge nginx, dropbear, fail2ban, squid
 sudo python3 main.py dashboard           # same as `kk`
 python3 main.py --version
 ```

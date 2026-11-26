@@ -48,11 +48,20 @@ class SSHServiceFeature(BaseFeature):
         log.success(f"sshd listening on port {port}")
 
     def remove(self) -> None:
-        text = SSHD_CONFIG.read_text()
+        if not SSHD_CONFIG.exists():
+            return
+        original = SSHD_CONFIG.read_text()
+        text = original
         for key in list(HARDENING_DIRECTIVES) + ["Banner"]:
             text = re.sub(rf"(?m)^{key}\s+.*$\n?", "", text)
         SSHD_CONFIG.write_text(text)
+        if not Shell.run("sshd -t", check=False).ok:
+            SSHD_CONFIG.write_text(original)
+            log.error("sshd config invalid after cleanup; original restored.")
+            return
+        SSH_BANNER_PATH.unlink(missing_ok=True)
         Shell.run("systemctl restart ssh || systemctl restart sshd", check=False)
+        log.info("OpenSSH hardening and banner removed (Port left unchanged to avoid lockout).")
 
     def _pick_random_banner(self):
         if not BANNERS_FILE.exists():

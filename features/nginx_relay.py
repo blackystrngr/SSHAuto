@@ -52,7 +52,10 @@ class NginxRelayFeature(BaseFeature):
 
     def remove(self) -> None:
         Shell.run(f"rm -f {self.enabled_path}", check=False)
-        Shell.run("systemctl reload nginx", check=False)
+        self.available_path.unlink(missing_ok=True)
+        if Shell.run("nginx -t", check=False).ok:
+            Shell.run("systemctl reload nginx", check=False)
+        log.info("nginx relay config removed.")
 
     def regenerate(self):
         self.install()
