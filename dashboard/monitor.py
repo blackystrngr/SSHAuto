@@ -34,7 +34,8 @@ class Monitor:
         ports = {p for p in (ssh_port, dropbear_port) if p}
         if not ports:
             return 0
-        filter_expr = " or ".join(f"dport = :{p} or sport = :{p}" for p in ports)
+        # sport only: loopback connections show up as two sockets, one per end
+        filter_expr = " or ".join(f"sport = :{p}" for p in ports)
         result = Shell.run(f"ss -tn state established '( {filter_expr} )'", check=False)
         if not result.ok:
             return 0

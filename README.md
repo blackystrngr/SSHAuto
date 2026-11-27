@@ -53,6 +53,8 @@ full tunnel path (nginx → proxy → Dropbear) and repairs what it can. When it
 sudo python3 main.py install [--only a,b] [--force] [--quiet] [--skip-non-idempotent]
 sudo python3 main.py install --squid     # also install the optional Squid proxy
 sudo python3 main.py squid               # install/reconfigure Squid on its own
+sudo python3 main.py install --panel     # also install the optional web panel
+sudo python3 main.py panel               # install/manage the web panel (--status, --reset-password, --remove)
 sudo python3 main.py doctor              # verify tunnel end-to-end and auto-repair (--no-heal: check only)
 sudo python3 main.py status              # per-feature install status
 sudo python3 main.py cert                # re-run the certificate menu
@@ -116,6 +118,22 @@ not blocked because the relay itself uses it.
 Limits: this is DNS filtering. A client that connects to an IP address directly, or uses its own DNS or
 DNS-over-HTTPS, is not filtered. The optional Squid proxy is not covered.
 
+## Optional web panel
+
+A browser UI to monitor and manage the server: live tunnel path, throughput chart, CPU/memory/disk,
+users (create, extend, lock, delete), relay ports, Squid, content filter, service restarts, health
+check with one-click repair, speed test, logs. Opt in with `install --panel` or `main.py panel`.
+
+- The panel server listens on `127.0.0.1` only. nginx publishes it under a secret URL path on the
+  existing relay ports; the URL and a generated admin password are printed once at install.
+  Lost password: `sudo python3 main.py panel --reset-password`.
+- Sign-in: scrypt password hash, signed HttpOnly/SameSite=Strict session cookie (12 h), CSRF header
+  on every API call, strict CSP, login rate limiting. Changing the password signs out all sessions.
+- Behind Cloudflare the per-IP login limit is weak (nginx sees the CDN address); the global limit and
+  the secret path still apply. For stricter access, `main.py panel --remove` and reach it by
+  `ssh -L 8088:127.0.0.1:<panel_port> ...` instead.
+- No build step: static files in `panel/static/`, Python standard library only.
+
 ## The `kk` dashboard
 
 ```
@@ -134,6 +152,7 @@ install.sh          bootstrap installer for a fresh VPS
 core/               config + state store, logger, shell wrapper, exceptions, plugin manager,
                     doctor (self-check/repair), uninstall, blocklists
 features/           one module per installable feature (auto-discovered)
+panel/              optional web panel (server, API, auth, metrics, static UI)
 dashboard/          the `kk` menu: users, ports, monitor, UI helpers
 templates/          nginx config templates
 data/banners.txt    pool of SSH banners

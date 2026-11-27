@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import re
 from dataclasses import dataclass
 
@@ -31,25 +32,64 @@ class UserManager:
                 Shell.run(f"echo {sh} >> /etc/shells", check=False)
 
     def create(self, username, password, expire_days=30):
-        if not USERNAME_RE.match(username):
-            raise ValidationError("invalid username")
-        if Shell.run(f"id -u {username}", check=False).ok:
+        self.validate_username(username)
+        self.validate_password(password)
+        if Shell.run(["id", "-u", username], check=False).ok:
             raise ValidationError(f"user '{username}' already exists")
         shell = self._tunnel_shell()
-        Shell.run(f"useradd -m -s {shell} -G {USER_GROUP} {username}")
-        Shell.run(f"printf '%s:%s\\n' '{username}' '{password}' | chpasswd", check=False)
-        Shell.run(f"passwd -u {username}", check=False)
-        if expire_days:
-            Shell.run(f"chage -M {expire_days} {username}", check=False)
-        if self._is_locked(username):
-            Shell.run(f"passwd -u {username}", check=False)
+        Shell.run(["useradd", "-m", "-s", shell, "-G", USER_GROUP, username])
+        # password goes through stdin, never through a shell string
+        done = Shell.run("chpasswd", check=False, input_text=f"{username}:{password}\n")
+        if not done.ok:
+            Shell.run(["userdel", "-r", username], check=False)
+            raise ValidationError("could not set the password", hint=done.stderr.strip() or None)
+        Shell.run(["passwd", "-u", username], check=False)
+        self.set_expiry(username, expire_days, _checked=True)
         log.success(f"created user '{username}'")
         return SSHUser(username, self._expiry_of(username), False)
 
     def delete(self, username):
-        if not Shell.run(f"userdel -r {username}", check=False).ok:
+        self._require_managed(username)
+        if not Shell.run(["userdel", "-rf", username], check=False).ok:
             raise ValidationError(f"could not delete '{username}'")
         log.success(f"deleted user '{username}'")
+
+    def set_expiry(self, username, days, _checked=False):
+        """Account expiry `days` from today (0/None = never)."""
+        if not _checked:
+            self._require_managed(username)
+        if days:
+            when = (datetime.date.today() + datetime.timedelta(days=int(days))).isoformat()
+        else:
+            when = "-1"
+        Shell.run(["chage", "-E", when, username], check=False)
+
+    def lock(self, username):
+        self._require_managed(username)
+        Shell.run(["passwd", "-l", username], check=False)
+        Shell.run(["pkill", "-KILL", "-u", username], check=False)
+
+    def unlock(self, username):
+        self._require_managed(username)
+        Shell.run(["passwd", "-u", username], check=False)
+
+    @staticmethod
+    def validate_username(username):
+        if not isinstance(username, str) or not USERNAME_RE.match(username):
+            raise ValidationError("invalid username",
+                                  hint="3-32 chars: lowercase letters, digits, _ and -, starting with a letter or _")
+
+    @staticmethod
+    def validate_password(password):
+        if (not isinstance(password, str) or not 6 <= len(password) <= 64
+                or any(ord(c) < 32 or ord(c) == 127 for c in password)):
+            raise ValidationError("invalid password", hint="6-64 printable characters")
+
+    def _require_managed(self, username):
+        """Only accounts this tool created (tunnel group) may be touched."""
+        self.validate_username(username)
+        if username not in {u.username for u in self.list()}:
+            raise ValidationError(f"'{username}' is not a tunnel user")
 
     def list(self):
         group_res = Shell.run(f"getent group {USER_GROUP}", check=False)
@@ -75,7 +115,7 @@ class UserManager:
         return "/bin/false"
 
     def _expiry_of(self, username):
-        result = Shell.run(f"chage -l {username}", check=False)
+        result = Shell.run(["chage", "-l", username], check=False)
         if not result.ok:
             return "unknown"
         for line in result.stdout.splitlines():
@@ -84,5 +124,5 @@ class UserManager:
         return "never"
 
     def _is_locked(self, username):
-        result = Shell.run(f"passwd -S {username}", check=False)
+        result = Shell.run(["passwd", "-S", username], check=False)
         return result.ok and " L " in f" {result.stdout} "

@@ -96,6 +96,8 @@ class NginxRelayFeature(BaseFeature):
                 log.debug("sslh detected – nginx will not listen on 443.")
 
         http_listen = "\n".join(f"    listen 0.0.0.0:{p};" for p in http_ports)
+        from panel.nginx import render_panel_location
+        panel_location = render_panel_location(data.get("panel_port"), data.get("panel_path"))
 
         https_block = ""
         cert_path, key_path = self._resolve_cert_paths(data)
@@ -109,6 +111,7 @@ class NginxRelayFeature(BaseFeature):
                 .replace("@KEY_PATH@", key_path)
                 .replace("@PROXY_PORT@", str(proxy_port))
                 .replace("@DOMAIN@", domain)
+                .replace("@PANEL_LOCATION@", panel_location)
             )
             log.info(f"HTTPS block enabled with cert {cert_path}")
         else:
@@ -122,6 +125,7 @@ class NginxRelayFeature(BaseFeature):
             .replace("@PROXY_PORT@", str(proxy_port))
             .replace("@DOMAIN@", domain)
             .replace("@HTTPS_SERVER_BLOCK@", https_block)
+            .replace("@PANEL_LOCATION@", panel_location)
         )
 
     def _resolve_cert_paths(self, data):

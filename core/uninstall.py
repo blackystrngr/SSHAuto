@@ -12,12 +12,12 @@ from core.shell import Shell
 STATE_DIR = Path("/var/lib/sshauto")
 KK_LAUNCHER = Path("/usr/local/bin/kk")
 INSTALL_DIR = Path("/opt/sshauto")
-LEGACY_UNITS = ("ws-ssh-proxy", "sshauto-proxy", "dropbear-tunnel", "badvpn-udpgw", "sshauto-dnsfilter")
+LEGACY_UNITS = ("ws-ssh-proxy", "sshauto-proxy", "dropbear-tunnel", "badvpn-udpgw", "sshauto-dnsfilter", "sshauto-panel")
 PURGE_PACKAGES = ["nginx", "dropbear", "fail2ban", "squid"]
 
 PLAN = """This will remove everything sshauto created:
   - tunnel users (group '{group}') and their home directories{users_note}
-  - services: ws-ssh-proxy, dropbear-tunnel, badvpn-udpgw, optional Squid and DNS content filter
+  - services: ws-ssh-proxy, dropbear-tunnel, badvpn-udpgw, optional Squid, DNS content filter and web panel
   - nginx relay site, fail2ban jails, OpenSSH hardening + banner (SSH port is left as is)
   - certificates, state ({state}), logs ({logs}), the 'kk' command{app_note}
   - custom relay port firewall rules (base ports stay open: other services may use them)

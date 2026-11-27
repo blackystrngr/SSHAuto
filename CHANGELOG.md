@@ -7,6 +7,12 @@
 - `optional` flag on features; `--version` flag.
 - Test suite, ruff, shellcheck, GitHub Actions CI, Makefile, pyproject.
 
+### Added (web panel)
+- Optional `web_panel` feature (`install --panel`, `main.py panel`): modern responsive UI (light/dark) for monitoring and management; loopback-only server behind a secret nginx path; scrypt auth, signed sessions, CSRF header, CSP, rate limiting. `doctor` and `uninstall` cover it.
+
+### Fixed
+- User management: expiry semantics, shell injection in password change, tunnel connections double-counted.
+
 ### Added (content filter)
 - Optional `content_filter` feature: DNS blocking of ads, malware, phishing and cryptominers for tunnel traffic (`install --filter`, `main.py filter`), per-category switches, allowlist, `--block-private` (RFC1918 / link-local / metadata), `--update`, `--status`, `--remove`.
 - Runs a loopback-only dnsmasq applied to `dropbear-tunnel` and `ws-ssh-proxy` through systemd drop-ins; system DNS is not modified.

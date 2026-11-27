@@ -15,6 +15,7 @@ server {
     ssl_session_cache shared:SSL:10m;
     ssl_session_timeout 10m;
 
+@PANEL_LOCATION@
     location / {
         proxy_pass http://127.0.0.1:@PROXY_PORT@;
         proxy_http_version 1.1;

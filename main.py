@@ -68,6 +68,9 @@ def cmd_install(args):
         only = [n for n in (only or manager.default_names()) if n not in NON_IDEMPOTENT]
     data = state.ensure_defaults()
     include = []
+    if args.panel:
+        _apply_panel_args(args)
+        include.append("web_panel")
     if args.filter:
         _apply_filter_args(args)
         include.append("content_filter")
@@ -150,6 +153,45 @@ def cmd_filter(args):
         if not feature.safe_install():
             sys.exit(1)
 
+def _apply_panel_args(args):
+    from core.exceptions import ValidationError
+    from panel.auth import Auth, generate_password
+    data = state.ensure_defaults()
+    auth = Auth()
+    user = args.panel_user or data.get("panel_user") or "admin"
+    password = args.panel_pass or (generate_password() if args.reset_password else None)
+    if password:
+        if len(password) < 10:
+            raise ValidationError("panel password needs at least 10 characters")
+        auth.set_credentials(user, password)
+        data = state.load()
+        data["panel_user"] = user
+        state.save(data)
+        log.important(f"Panel login: {user} / {password}")
+    elif args.panel_user and auth.configured():
+        data["panel_user"] = user
+        state.save(data)
+
+def cmd_panel(args):
+    require_root()
+    feature = PluginManager().get("web_panel")
+    if args.remove:
+        feature.remove()
+    elif args.status:
+        from features.web_panel import panel_url
+        data = state.load()
+        print(f"service: {'active' if feature.is_installed() else 'not running'}")
+        print(f"url:     {panel_url(data) or 'not configured'}")
+        print(f"user:    {data.get('panel_user') or '-'}")
+    else:
+        _apply_panel_args(args)
+        if not feature.safe_install():
+            sys.exit(1)
+
+def cmd_serve_panel(args):
+    from panel.server import serve
+    serve()
+
 def cmd_status(args):
     PluginManager().status_all()
 
@@ -191,6 +233,11 @@ def _add_filter_opts(p):
     p.add_argument("--block-private", action=argparse.BooleanOptionalAction, default=None,
                    help="block tunnel access to private/link-local networks (incl. cloud metadata)")
 
+def _add_panel_opts(p):
+    p.add_argument("--panel-user", help="panel username (default: admin)")
+    p.add_argument("--panel-pass", help="panel password, at least 10 characters (default: random, shown once)")
+    p.add_argument("--reset-password", action="store_true", help="set a new random panel password")
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="sshauto")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -205,11 +252,19 @@ def build_parser():
     _add_squid_opts(p)
     p.add_argument("--filter", action="store_true", help="also install the optional DNS content filter")
     _add_filter_opts(p)
+    p.add_argument("--panel", action="store_true", help="also install the optional web panel")
+    _add_panel_opts(p)
     p.set_defaults(func=cmd_install)
     p = sub.add_parser("squid", help="install/reconfigure the optional Squid proxy")
     p.add_argument("--remove", action="store_true", help="disable Squid")
     _add_squid_opts(p)
     p.set_defaults(func=cmd_squid)
+    p = sub.add_parser("panel", help="optional web panel (monitor and manage in a browser)")
+    _add_panel_opts(p)
+    p.add_argument("--status", action="store_true", help="show the panel URL and user")
+    p.add_argument("--remove", action="store_true", help="remove the panel")
+    p.set_defaults(func=cmd_panel)
+    sub.add_parser("serve-panel", help=argparse.SUPPRESS).set_defaults(func=cmd_serve_panel)
     p = sub.add_parser("filter", help="optional DNS content filter (ads/malware/phishing/cryptominers)")
     _add_filter_opts(p)
     p.add_argument("--status", action="store_true", help="show what is blocked")

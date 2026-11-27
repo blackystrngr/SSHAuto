@@ -13,6 +13,7 @@ server {
     client_body_timeout 86400s;
     client_max_body_size 0;
 
+@PANEL_LOCATION@
     location / {
         proxy_pass http://127.0.0.1:@PROXY_PORT@;
         proxy_http_version 1.1;

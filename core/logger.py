@@ -24,6 +24,14 @@ class Logger:
         self.name = name
         self.verbose = verbose
         self.no_color = no_color or not sys.stdout.isatty()
+        self._sinks = []     # callables(str) that also receive every line (used by the web panel's jobs)
+
+    def add_sink(self, fn):
+        self._sinks.append(fn)
+
+    def remove_sink(self, fn):
+        if fn in self._sinks:
+            self._sinks.remove(fn)
 
     def _paint(self, text, *codes):
         if self.no_color:
@@ -36,6 +44,11 @@ class Logger:
             prefix = self._paint(f" {symbol} {tag:<9}", Color.BOLD, color)
             timestamp = self._paint(f"[{ts}]", Color.DIM)
             print(f"{timestamp} {prefix} {message}")
+            for sink in list(self._sinks):
+                try:
+                    sink(f"[{ts}] {tag:<9} {message}")
+                except Exception:
+                    pass
 
     def debug(self, msg):
         if self.verbose:

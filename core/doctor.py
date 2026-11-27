@@ -82,6 +82,20 @@ def run_checks() -> list[Check]:
     ok, detail = ws_handshake("127.0.0.1", 80)
     checks.append(Check("nginx :80 → ws proxy → dropbear", ok, detail, "nginx_relay"))
     checks.extend(_filter_checks())
+    checks.extend(_panel_checks(data))
+    return checks
+
+
+def _panel_checks(data: dict) -> list[Check]:
+    """Only when the optional web panel is installed."""
+    if not (SYSTEMD_DIR / "sshauto-panel.service").exists():
+        return []
+    from features.web_panel import local_ok
+    active = Shell.run("systemctl is-active sshauto-panel", check=False, timeout=10).ok
+    checks = [Check("service sshauto-panel", active, "" if active else "not active", "web_panel")]
+    ok = bool(data.get("panel_port") and data.get("panel_path")) and \
+        local_ok(int(data["panel_port"]), data["panel_path"])
+    checks.append(Check("panel answers", ok, "" if ok else "no HTTP 200 on loopback", "web_panel"))
     return checks
 
 
