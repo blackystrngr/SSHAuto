@@ -23,9 +23,10 @@ PUBLIC_SSH_PORT_DEFAULT = 2222
 USER_GROUP = "sshauto-users"
 
 REQUIRED_PACKAGES = [
-    "nginx", "dropbear", "fail2ban", "iptables", "curl", "git",
+    "dropbear", "fail2ban", "iptables", "curl", "git",
     "certbot"
 ]
+# nginx is only installed when the optional nginx_relay feature is explicitly used
 REMOVE_PACKAGES = ["apache2", "ufw", "firewalld"]
 PIP_PACKAGES = []
 

@@ -20,9 +20,20 @@ TEMPLATES_DIR = APP_ROOT / "templates"
 NGINX_SITE_NAME = "sshauto-relay"
 
 class NginxRelayFeature(BaseFeature):
+    """Classic reverse-proxy relay. OPTIONAL and not installed by default: with it active the
+    Python proxy only binds on loopback, so the normal nginx limitation applies — a request
+    carrying two Host headers gets a 400 before it ever reaches the proxy. Use this only if you
+    need nginx's other features (e.g. serving the web panel) and don't need dual-Host support."""
     name = "nginx_relay"
-    description = "Generate the nginx WebSocket relay (HTTP+HTTPS)"
+    description = "Classic nginx relay (optional, no dual-Host support; installs nginx)"
     depends_on = ["packages", "dropbear_service", "python_proxy", "certificates"]
+    optional = True
+
+    def _ensure_nginx_installed(self):
+        if Shell.run("dpkg -s nginx", check=False).ok:
+            return
+        Shell.run("apt-get update -y", check=False, timeout=180)
+        Shell.run("DEBIAN_FRONTEND=noninteractive apt-get install -y nginx", timeout=300)
 
     @property
     def available_path(self):
@@ -35,6 +46,7 @@ class NginxRelayFeature(BaseFeature):
         return self.enabled_path.exists() or self.enabled_path.is_symlink()
 
     def install(self) -> None:
+        self._ensure_nginx_installed()
         NGINX_SITES_AVAILABLE.mkdir(parents=True, exist_ok=True)
         NGINX_SITES_ENABLED.mkdir(parents=True, exist_ok=True)
         self._remove_conflicting_sites()

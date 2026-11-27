@@ -31,7 +31,7 @@ class PackagesFeature(BaseFeature):
         log.warning("packages feature does not uninstall required packages (too destructive)")
 
     def _core_check_list(self):
-        return ["nginx", "dropbear", "openssh-server", "fail2ban",
+        return ["dropbear", "openssh-server", "fail2ban",
                 "certbot", "python3", "iptables", "git"]
 
     def _dpkg_installed(self, pkg):

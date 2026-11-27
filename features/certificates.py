@@ -153,9 +153,19 @@ class CertificatesFeature(BaseFeature):
             "cert_issued_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         })
         state.save(data)
-        from features.nginx_relay import NginxRelayFeature
-        NginxRelayFeature().regenerate()
-        log.success("Certificate ready and applied to nginx.")
+        self._apply(data)
+        log.success("Certificate ready and applied.")
+
+    def _apply(self, data):
+        """Push the new cert to whichever relay is active."""
+        from pathlib import Path as _P
+
+        from features.python_proxy import NGINX_MARKER, PythonProxyFeature
+        if _P(NGINX_MARKER).exists():
+            from features.nginx_relay import NginxRelayFeature
+            NginxRelayFeature().regenerate()
+        else:
+            PythonProxyFeature().restart()
 
     def remove(self):
         data = state.load()

@@ -2,13 +2,23 @@ import socket
 import time
 from pathlib import Path
 
-from core.config import DROPBEAR_PORT_DEFAULT, LOG_DIR, PROXY_PORT_DEFAULT, state
+from core.config import (
+    DROPBEAR_PORT_DEFAULT,
+    HTTP_PORTS,
+    HTTPS_PORTS,
+    LOG_DIR,
+    PROXY_PORT_DEFAULT,
+    state,
+)
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
 
 PROXY_BIN = Path("/usr/local/bin/ws_ssh_proxy.py")
 SERVICE_NAME = "ws-ssh-proxy.service"
+STATE_PATH = "/var/lib/sshauto/state.json"
+NGINX_MARKER = "/etc/nginx/sites-enabled/sshauto-relay.conf"
+
 
 def find_available_port(start_port=9955, max_tries=10):
     for port in range(start_port, start_port + max_tries):
@@ -20,9 +30,20 @@ def find_available_port(start_port=9955, max_tries=10):
                 continue
     raise Exception("No available ports found.")
 
+
 class PythonProxyFeature(BaseFeature):
+    """
+    By default (no nginx_relay installed) this binds directly, on 0.0.0.0, to the
+    same ports Cloudflare's proxy will forward (80/8080/2052/.../443/8443/2083/...).
+    Nothing sits in front of it, so a request with two `Host:` headers reaches it
+    unmodified instead of being rejected by nginx's stricter HTTP parser.
+
+    If the optional nginx_relay feature is active (NGINX_MARKER exists) this falls
+    back to the old loopback-only mode and lets nginx be the public listener again
+    (and dual-Host goes back to not being supported, since that's nginx's doing).
+    """
     name = "python_proxy"
-    depends_on = ["packages", "dropbear_service"]
+    depends_on = ["packages", "dropbear_service", "certificates", "firewall"]
 
     def is_installed(self) -> bool:
         return PROXY_BIN.exists() and Shell.run(f"systemctl is-active {SERVICE_NAME}", check=False).ok
@@ -46,15 +67,20 @@ class PythonProxyFeature(BaseFeature):
         LOG_DIR.mkdir(parents=True, exist_ok=True)
 
         self._ensure_uvloop()
+        self._free_the_ports()
+
+        default_http_ports = sorted(HTTP_PORTS)
+        default_https_ports = sorted(HTTPS_PORTS)
 
         proxy_code = f'''#!/usr/bin/env python3
 import asyncio
+import json
 import socket
 import logging
+import ssl
 import time
 import sys
 from pathlib import Path
-import urllib.parse
 
 import uvloop  # required: installer guarantees it
 
@@ -68,13 +94,44 @@ logging.basicConfig(
 )
 logging.info("Proxy starting (uvloop)")
 
-DROPBEAR_PORT = {dropbear_port}
-PROXY_PORT = {proxy_port}
+STATE_PATH = Path({STATE_PATH!r})
+NGINX_MARKER = Path({NGINX_MARKER!r})
+
+DEFAULT_DROPBEAR_PORT = {dropbear_port}
+DEFAULT_PROXY_PORT = {proxy_port}
+DEFAULT_HTTP_PORTS = {default_http_ports}
+DEFAULT_HTTPS_PORTS = {default_https_ports}
+
+DROPBEAR_PORT = DEFAULT_DROPBEAR_PORT  # resolved fresh in main() from state.json
 READ_CHUNK = 65536  # 64KB
 STREAM_LIMIT = 262144  # 256KB stream buffer
-BIND_HOST = "127.0.0.1"  # nginx is the only public listener
 HANDSHAKE_TIMEOUT = 30  # seconds to receive the request line + headers
 HTTP_IDLE = 300  # idle limit for plain HTTP forwarding
+MAX_HEADER_LINES = 100
+
+def load_state():
+    try:
+        return json.loads(STATE_PATH.read_text() or "{{}}")
+    except Exception:
+        return {{}}
+
+def resolve_ports(st):
+    http_ports = set(DEFAULT_HTTP_PORTS) | set(st.get("custom_http_ports", []))
+    https_ports = set(DEFAULT_HTTPS_PORTS) | set(st.get("custom_https_ports", []))
+    return sorted(int(p) for p in http_ports), sorted(int(p) for p in https_ports)
+
+def make_ssl_context(st):
+    cert, key = st.get("cert_fullchain_path"), st.get("cert_key_path")
+    if not (cert and key and Path(cert).exists() and Path(key).exists()):
+        return None
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    try:
+        ctx.set_alpn_protocols(["http/1.1"])
+    except Exception:
+        pass
+    ctx.load_cert_chain(cert, key)
+    return ctx
 
 def tune_socket(sock):
     try:
@@ -125,15 +182,14 @@ async def relay(a_reader, a_writer, b_reader, b_writer):
             except Exception:
                 pass
 
-async def handle_http_forward(reader, writer, method, raw_target, headers, first_line):
-    """Forward plain HTTP request to the target from Host header."""
+async def handle_http_forward(reader, writer, method, raw_target, headers, first_line, raw_headers):
+    """Forward a plain (non-upgrade) HTTP request to whatever its first Host header names."""
     host_header = headers.get('host')
     if not host_header:
         writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
         writer.close()
         return
 
-    # Parse host:port (default port 80 if none)
     if ':' in host_header:
         host, port_str = host_header.rsplit(':', 1)
         try:
@@ -158,16 +214,13 @@ async def handle_http_forward(reader, writer, method, raw_target, headers, first
         writer.close()
         return
 
-    # Send the original request (first line + headers + body)
+    # Send the original request line and every header line verbatim, duplicates included,
+    # so a second Host: (or any other repeated header) reaches the upstream unmodified.
     target_writer.write(first_line)
-    for key, value in headers.items():
-        # Rebuild headers (skip Host and Connection? We'll keep them)
-        target_writer.write(f"{{key}}: {{value}}\\r\\n".encode())
+    for line in raw_headers:
+        target_writer.write(line)
     target_writer.write(b'\\r\\n')
 
-    # If there is a request body, read and forward it (we need to read it first)
-    # For simplicity, we assume no body or we pipe the rest of the client stream
-    # The client may have already sent the body, so we'll pipe remaining data.
     async def client_to_target():
         try:
             while True:
@@ -231,29 +284,39 @@ async def _handle_client(reader, writer):
         logging.info(f"Rejected raw SSH from {{peername}}")
         return
 
-    # --- Parse HTTP request ---
-    try:
-        parts = first_line.decode().strip().split()
-        if len(parts) < 3:
-            writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
-            writer.close()
-            return
-        method, raw_target, version = parts[0], parts[1], parts[2]
-    except Exception:
+    # --- Parse the request line (latin-1: never raises on arbitrary bytes) ---
+    parts = first_line.decode('latin-1').strip().split()
+    if len(parts) < 3:
         writer.write(b'HTTP/1.1 400 Bad Request\\r\\n\\r\\n')
         writer.close()
         return
+    method, raw_target, version = parts[0], parts[1], parts[2]
 
+    # Dual / duplicate headers are accepted here on purpose: the FIRST occurrence of
+    # a given header name wins (that's what `headers` holds below); any later copy,
+    # e.g. a second "Host:", is simply ignored rather than rejected. Lines without a
+    # colon are skipped instead of raising. raw_headers keeps every line verbatim,
+    # for plain-HTTP forwarding where duplicates should reach the upstream untouched.
     headers = {{}}
+    raw_headers = []
     while True:
-        line = await asyncio.wait_for(reader.readline(), HANDSHAKE_TIMEOUT)
-        if not line or line == b'\\r\\n':
+        try:
+            line = await asyncio.wait_for(reader.readline(), HANDSHAKE_TIMEOUT)
+        except Exception:
+            writer.close()
+            return
+        if not line or line in (b'\\r\\n', b'\\n'):
             break
-        key, sep, value = line.decode(errors='replace').partition(':')
+        if len(raw_headers) >= MAX_HEADER_LINES:
+            writer.write(b'HTTP/1.1 431 Request Header Fields Too Large\\r\\n\\r\\n')
+            writer.close()
+            return
+        raw_headers.append(line)
+        key, sep, value = line.decode('latin-1').partition(':')
         if sep:
-            headers[key.strip().lower()] = value.strip()
+            headers.setdefault(key.strip().lower(), value.strip())
 
-    # --- WebSocket upgrade ---
+    # --- WebSocket upgrade (case-insensitive value, works whichever Host line "wins") ---
     upgrade = headers.get('upgrade', '').lower()
     if upgrade == 'websocket':
         logging.info(f"WebSocket upgrade from {{peername}} (method: {{method}})")
@@ -278,7 +341,7 @@ async def _handle_client(reader, writer):
         return
 
     # --- Plain HTTP forward (GET, POST, etc.) ---
-    await handle_http_forward(reader, writer, method, raw_target, headers, first_line)
+    await handle_http_forward(reader, writer, method, raw_target, headers, first_line, raw_headers)
 
 async def handle_connect(reader, writer, host, port):
     try:
@@ -330,23 +393,63 @@ async def handle_websocket(reader, writer):
     if ssh_sock:
         tune_socket(ssh_sock)
 
-    logging.info(f"WebSocket tunnel established")
+    logging.info("WebSocket tunnel established")
     await relay(reader, writer, ssh_reader, ssh_writer)
 
-async def main():
-    server = await asyncio.start_server(
-        handle_client, BIND_HOST, PROXY_PORT,
-        limit=STREAM_LIMIT,
-        backlog=1024,
-        reuse_address=True,
-    )
-    for s in server.sockets:
+async def start(host, port, ssl_ctx=None, required=False):
+    try:
+        srv = await asyncio.start_server(
+            handle_client, host, port,
+            ssl=ssl_ctx, limit=STREAM_LIMIT, backlog=1024, reuse_address=True,
+        )
+    except OSError as e:
+        msg = f"Cannot listen on {{host}}:{{port}}: {{e}}"
+        if required:
+            logging.critical(msg)
+            raise
+        logging.error(msg)
+        return None
+    for s in srv.sockets:
         tune_socket(s)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    logging.warning(f"Listening on {{host}}:{{port}}{{' (TLS)' if ssl_ctx else ''}}")
+    return srv
 
-    logging.info(f"Proxy listening on {{BIND_HOST}}:{{PROXY_PORT}} (uvloop) – WebSocket, CONNECT, and HTTP forward")
-    async with server:
-        await server.serve_forever()
+async def main():
+    global DROPBEAR_PORT
+    st = load_state()
+    DROPBEAR_PORT = int(st.get("dropbear_port", DEFAULT_DROPBEAR_PORT))
+    proxy_port = int(st.get("proxy_port", DEFAULT_PROXY_PORT))
+
+    servers = []
+    if NGINX_MARKER.exists():
+        # The optional classic nginx relay is active: it's the only public listener,
+        # and dual-Host support depends on nginx instead (it doesn't support it).
+        logging.warning("nginx_relay active: proxy running in loopback-only mode")
+        servers.append(await start("127.0.0.1", proxy_port, required=True))
+    else:
+        # Default mode: bind directly on the real HTTP/HTTPS ports Cloudflare (or any
+        # CDN) forwards to, with no reverse proxy in front, so duplicate Host headers
+        # reach this parser unmodified.
+        http_ports, https_ports = resolve_ports(st)
+        for p in http_ports:
+            servers.append(await start("0.0.0.0", p))
+        ssl_ctx = make_ssl_context(st)
+        if ssl_ctx:
+            for p in https_ports:
+                servers.append(await start("0.0.0.0", p, ssl_ctx=ssl_ctx))
+        else:
+            logging.error("No certificate in state.json yet; HTTPS ports not opened "
+                           "(plain HTTP ports are still active). Run the cert step, "
+                           "then restart this service.")
+        # Keep the loopback port open too, so `main.py status`/doctor checks and a
+        # later nginx_relay install both still have something to talk to.
+        servers.append(await start("127.0.0.1", proxy_port))
+
+    servers = [s for s in servers if s]
+    if not servers:
+        logging.critical("No listener could be started; exiting.")
+        return
+    await asyncio.gather(*(s.serve_forever() for s in servers))
 
 if __name__ == '__main__':
     if hasattr(uvloop, 'run'):
@@ -359,7 +462,7 @@ if __name__ == '__main__':
         PROXY_BIN.chmod(0o755)
 
         service_content = f"""[Unit]
-Description=Universal Proxy (WebSocket + CONNECT + HTTP)
+Description=Universal Proxy (WebSocket + CONNECT + HTTP, direct public bind)
 After=network.target dropbear-tunnel.service
 Wants=dropbear-tunnel.service
 
@@ -370,6 +473,7 @@ Restart=always
 RestartSec=3
 User=root
 LimitNOFILE=65536
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 StandardOutput=append:/var/log/sshauto/proxy.log
 StandardError=append:/var/log/sshauto/proxy.log
 
@@ -396,7 +500,11 @@ WantedBy=multi-user.target
             log.error(f"Proxy is not active: {status.stdout}")
             raise Exception("Proxy not active")
 
-        log.success(f"Universal proxy installed on port {proxy_port} (WebSocket, CONNECT, HTTP forward)")
+        if not data.get("cert_fullchain_path"):
+            log.important("No certificate yet: HTTPS ports are not listening. "
+                           "Run 'sudo python3 main.py cert' then restart ws-ssh-proxy.")
+        log.success(f"Universal proxy installed, binding directly on the HTTP/HTTPS relay ports "
+                    f"(loopback fallback :{proxy_port})")
 
     def remove(self) -> None:
         Shell.run(f"systemctl stop {SERVICE_NAME}", check=False, timeout=10)
@@ -405,6 +513,21 @@ WantedBy=multi-user.target
         PROXY_BIN.unlink(missing_ok=True)
         Shell.run("systemctl daemon-reload", check=False, timeout=10)
         log.info("Python Proxy removed")
+
+    def restart(self) -> bool:
+        """Call after ports or the certificate change in state.json so the running
+        process picks them up (it reads state.json fresh at startup)."""
+        return Shell.run(f"systemctl restart {SERVICE_NAME}", check=False, timeout=20).ok
+
+    def _free_the_ports(self) -> None:
+        """We're about to bind 80/443/etc. directly; stop nginx if it's sitting on them
+        (e.g. left over from a previous install, or installed for some other reason)."""
+        if Path(NGINX_MARKER).exists():
+            return  # nginx_relay is deliberately active; leave it alone
+        if Shell.run("systemctl is-active nginx", check=False).ok:
+            log.warning("Stopping nginx so the proxy can bind the relay ports directly.")
+            Shell.run("systemctl stop nginx", check=False, timeout=10)
+            Shell.run("systemctl disable nginx", check=False, timeout=10)
 
     def _ensure_uvloop(self) -> None:
         """uvloop is mandatory: try pip (new + old pip syntax), then apt."""

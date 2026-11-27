@@ -3,7 +3,7 @@
 [![CI](https://github.com/blackystrngr/SSHAuto/actions/workflows/ci.yml/badge.svg)](https://github.com/blackystrngr/SSHAuto/actions/workflows/ci.yml)
 
 SSH-over-WebSocket relay autoscript for Debian/Ubuntu VPS. One command installs and
-wires together nginx, a Python WebSocket proxy, Dropbear, OpenSSH, fail2ban, iptables
+wires together a Python WebSocket proxy, Dropbear, OpenSSH, fail2ban, iptables
 rules and TLS certificates, then gives you a `kk` dashboard to manage users and ports.
 
 > **Use responsibly.** Run this only on infrastructure you own, in line with your
@@ -12,15 +12,27 @@ rules and TLS certificates, then gives you a `kk` dashboard to manage users and 
 ## Architecture
 
 ```
-client ─▶ CDN ─▶ nginx (HTTP/HTTPS relay ports) ─▶ Python proxy (127.0.0.1:9955)
-                                                        │
-                                                        └─▶ Dropbear (127.0.0.1:110)
+client ─▶ CDN (Cloudflare, etc.) ─▶ Python proxy, bound directly on every HTTP/HTTPS
+                                     relay port (80, 443, 8080, 2083, ...) — no nginx
+                                        │
+                                        └─▶ Dropbear (127.0.0.1:110)
 ```
+
+There is **no reverse proxy in front of the Python relay by default.** It binds
+directly, on `0.0.0.0`, to every plain HTTP relay port (`80, 8080, 8880, 2052,
+2082, 2086, 2095` plus any custom ones) and, terminating TLS itself with the
+stored certificate, every HTTPS relay port (`443, 8443, 2053, 2083, 2087, 2096`
+plus custom). This is what lets it accept a request carrying **two `Host:`
+headers**: nginx's HTTP parser rejects those outright (`400`), but this proxy's
+own line-by-line parser keeps the first `Host` and quietly ignores any later
+copies, so a dual-Host WebSocket payload (plain or TLS) still reaches the
+upgrade logic and gets tunneled to Dropbear. A plain (non-upgrade) HTTP request
+is forwarded to whatever its first `Host:` names, with every header line —
+duplicates included — passed through untouched.
 
 | Component | Role |
 |---|---|
-| nginx | Public entry point on all HTTP/HTTPS relay ports, catch-all `server_name`, no buffering |
-| Python proxy | uvloop-based, loopback only. Handles WebSocket upgrade, HTTP `CONNECT` and plain HTTP forwarding (systemd: `ws-ssh-proxy`) |
+| Python proxy | uvloop-based. Binds directly on every HTTP/HTTPS relay port (public), handles WebSocket upgrade, HTTP `CONNECT` and plain HTTP forwarding, dual-Host tolerant, terminates TLS itself (systemd: `ws-ssh-proxy`) |
 | Dropbear | Tunnel SSH backend, loopback only (systemd: `dropbear-tunnel`) |
 | OpenSSH | Direct admin access on its own port, with a random banner |
 | fail2ban | Jails for sshd and Dropbear |
@@ -29,6 +41,7 @@ client ─▶ CDN ─▶ nginx (HTTP/HTTPS relay ports) ─▶ Python proxy (127
 | udpgw | Optional UDP forwarding via badvpn-udpgw |
 | Squid | Optional authenticated proxy, see below |
 | Content filter | Optional DNS blocking of ads, malware, phishing and cryptominers for tunnel traffic, see below |
+| nginx (`nginx_relay`) | **Optional, off by default.** Classic reverse-proxy mode: nginx becomes the public listener and the Python proxy drops back to loopback-only. Dual-Host stops working in this mode (that limitation is nginx's). Only turn this on if you need nginx for something else (e.g. the web panel) |
 
 ## Install
 

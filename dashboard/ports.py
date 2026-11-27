@@ -54,8 +54,15 @@ class PortManager:
             Shell.run(f"iptables -D INPUT -p tcp --dport {port} -j ACCEPT", check=False)
 
     def _apply_nginx(self):
+        """Push the new port list to whichever relay is active."""
+        from pathlib import Path
+
+        from features.python_proxy import NGINX_MARKER, PythonProxyFeature
         try:
-            from features.nginx_relay import NginxRelayFeature
-            NginxRelayFeature().install()
+            if Path(NGINX_MARKER).exists():
+                from features.nginx_relay import NginxRelayFeature
+                NginxRelayFeature().install()
+            else:
+                PythonProxyFeature().restart()
         except Exception as exc:
-            log.error(f"Failed to update nginx: {exc}")
+            log.error(f"Failed to apply port change: {exc}")
