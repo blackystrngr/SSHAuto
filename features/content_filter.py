@@ -49,6 +49,8 @@ After=network.target
 ExecStart={dnsmasq_bin} -k --conf-file={DNSMASQ_CONF}
 Restart=always
 RestartSec=2
+# small VPS: never let the OOM killer pick the resolver (or the tunnel dies with it)
+OOMScoreAdjust=-500
 
 [Install]
 WantedBy=multi-user.target

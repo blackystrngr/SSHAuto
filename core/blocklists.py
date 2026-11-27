@@ -1,6 +1,7 @@
 """Blocklist download/normalisation and a tiny DNS probe, shared by the content filter and the doctor."""
 from __future__ import annotations
 
+import io
 import os
 import re
 import socket
@@ -63,7 +64,7 @@ def parse_domains(text: str, allow=()) -> set[str]:
     """Accepts plain domains, hosts-file lines and dnsmasq local=/x/ lines."""
     allow = tuple(a.lower().strip(".") for a in allow if a.strip())
     found: set[str] = set()
-    for line in text.splitlines():
+    for line in io.StringIO(text):      # stream lines instead of materialising a 500k-item list
         domain = _extract(line)
         if not domain or not _DOMAIN_RE.match(domain):
             continue
@@ -73,19 +74,29 @@ def parse_domains(text: str, allow=()) -> set[str]:
     return found
 
 
+def collapse(domains: set[str]) -> set[str]:
+    """Drop domains already covered by a blocked parent: dnsmasq `local=/x.com/` matches every subdomain,
+    so `a.b.x.com` is dead weight when `x.com` is listed. Same behaviour, far fewer entries in RAM."""
+    out = set()
+    for d in domains:
+        parts = d.split(".")
+        if not any(".".join(parts[i:]) in domains for i in range(1, len(parts) - 1)):
+            out.add(d)
+    return out
+
+
 def download(url: str, retries: int = 3) -> str | None:
     for attempt in range(1, retries + 1):
         try:
             with requests.get(url, stream=True, timeout=(10, 60),
                               headers={"User-Agent": "sshauto"}) as resp:
                 resp.raise_for_status()
-                chunks, size = [], 0
+                buf = bytearray()
                 for chunk in resp.iter_content(65536):
-                    size += len(chunk)
-                    if size > MAX_BYTES:
+                    buf += chunk
+                    if len(buf) > MAX_BYTES:
                         raise ValueError("list too large")
-                    chunks.append(chunk)
-                return b"".join(chunks).decode("utf-8", "replace")
+                return buf.decode("utf-8", "replace")
         except (requests.RequestException, ValueError) as exc:
             log.warning(f"download failed ({attempt}/{retries}) {url}: {exc}")
             time.sleep(2 * attempt)
@@ -117,6 +128,8 @@ def build(categories, allow=(), lists_dir: Path = LISTS_DIR) -> dict[str, int]:
             text = download(url)
             if text:
                 domains |= parse_domains(text, allow)
+            del text                    # release the raw list before fetching the next one
+        domains = collapse(domains)
         if len(domains) < MIN_ENTRIES:
             counts[cat] = count_entries(path)
             if counts[cat]:
@@ -125,7 +138,8 @@ def build(categories, allow=(), lists_dir: Path = LISTS_DIR) -> dict[str, int]:
                 log.error(f"{cat}: could not download a usable list")
             continue
         tmp = path.with_suffix(".tmp")      # not *.conf, so dnsmasq never reads a half-written file
-        tmp.write_text("".join(f"local=/{d}/\n" for d in sorted(domains)))
+        with tmp.open("w") as fh:       # write line by line, no giant joined string
+            fh.writelines(f"local=/{d}/\n" for d in sorted(domains))
         tmp.replace(path)
         counts[cat] = len(domains)
         log.success(f"{cat:<13} {len(domains):>7} domains")

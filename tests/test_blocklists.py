@@ -73,3 +73,8 @@ def test_dns_rcode_no_answer():
     port = s.getsockname()[1]
     assert b.dns_rcode("127.0.0.1", "example.com", port=port, timeout=0.3) is None
     s.close()
+
+
+def test_collapse_drops_covered_subdomains():
+    got = b.collapse({"x.com", "a.x.com", "b.a.x.com", "y.org", "ax.com"})
+    assert got == {"x.com", "y.org", "ax.com"}
