@@ -1,4 +1,5 @@
 import datetime
+import os
 import shutil
 import time
 from pathlib import Path
@@ -107,7 +108,11 @@ class CertificatesFeature(BaseFeature):
 
     def _interactive(self):
         data = state.ensure_defaults()
-        domain = input("Enter your domain name (e.g., hi.blackstrngr.qzz.io): ").strip()
+        # Unattended mode: SSHAUTO_DOMAIN (+ SSHAUTO_CF_EMAIL and SSHAUTO_CF_KEY for a Cloudflare origin cert)
+        env_domain = os.environ.get("SSHAUTO_DOMAIN", "").strip()
+        env_email = os.environ.get("SSHAUTO_CF_EMAIL", "").strip()
+        env_key = os.environ.get("SSHAUTO_CF_KEY", "").strip()
+        domain = env_domain or input("Enter your domain name (e.g., hi.blackstrngr.qzz.io): ").strip()
         if not domain:
             raise CertificateError("Domain cannot be empty.")
         state.set("cert_domain", domain)
@@ -116,12 +121,15 @@ class CertificatesFeature(BaseFeature):
         print("Choose certificate type:")
         print("  1) Cloudflare Origin Certificate (15‑year validity)")
         print("  2) Skip – generate self‑signed certificate")
-        choice = input("Enter 1 or 2: ").strip()
+        if env_domain:
+            choice = "1" if (env_email and env_key) else "2"
+        else:
+            choice = input("Enter 1 or 2: ").strip()
         if choice == "1":
-            email = input("Cloudflare Account Email: ").strip()
+            email = env_email or input("Cloudflare Account Email: ").strip()
             if not email:
                 raise CertificateError("Email is required.")
-            api_key = input("Cloudflare Global API Key: ").strip()
+            api_key = env_key or input("Cloudflare Global API Key: ").strip()
             if not api_key:
                 raise CertificateError("API Key is required.")
             strategy = CloudflareStrategy(email, api_key, domain)
