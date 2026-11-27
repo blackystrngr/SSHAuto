@@ -73,6 +73,8 @@ PROXY_PORT = {proxy_port}
 READ_CHUNK = 65536  # 64KB
 STREAM_LIMIT = 262144  # 256KB stream buffer
 BIND_HOST = "127.0.0.1"  # nginx is the only public listener
+HANDSHAKE_TIMEOUT = 30  # seconds to receive the request line + headers
+HTTP_IDLE = 300  # idle limit for plain HTTP forwarding
 
 def tune_socket(sock):
     try:
@@ -91,10 +93,13 @@ def tune_socket(sock):
     except Exception:
         pass
 
-async def pipe(src, dst, direction=""):
+async def pipe(src, dst, direction="", idle=None):
     try:
         while True:
-            data = await src.read(READ_CHUNK)
+            if idle:
+                data = await asyncio.wait_for(src.read(READ_CHUNK), idle)
+            else:
+                data = await src.read(READ_CHUNK)
             if not data:
                 break
             dst.write(data)
@@ -103,6 +108,22 @@ async def pipe(src, dst, direction=""):
         logging.debug(f"pipe {{direction}} error: {{e}}")
     finally:
         dst.close()
+
+async def relay(a_reader, a_writer, b_reader, b_writer):
+    """Pump both directions; as soon as either side ends, tear down BOTH so no fd is left behind."""
+    tasks = [asyncio.ensure_future(pipe(a_reader, b_writer, "a->b")),
+             asyncio.ensure_future(pipe(b_reader, a_writer, "b->a"))]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        for w in (a_writer, b_writer):
+            try:
+                w.close()
+            except Exception:
+                pass
 
 async def handle_http_forward(reader, writer, method, raw_target, headers, first_line):
     """Forward plain HTTP request to the target from Host header."""
@@ -150,7 +171,7 @@ async def handle_http_forward(reader, writer, method, raw_target, headers, first
     async def client_to_target():
         try:
             while True:
-                data = await reader.read(READ_CHUNK)
+                data = await asyncio.wait_for(reader.read(READ_CHUNK), HTTP_IDLE)
                 if not data:
                     break
                 target_writer.write(data)
@@ -161,7 +182,7 @@ async def handle_http_forward(reader, writer, method, raw_target, headers, first
     async def target_to_client():
         try:
             while True:
-                data = await target_reader.read(READ_CHUNK)
+                data = await asyncio.wait_for(target_reader.read(READ_CHUNK), HTTP_IDLE)
                 if not data:
                     break
                 writer.write(data)
@@ -178,6 +199,15 @@ async def handle_http_forward(reader, writer, method, raw_target, headers, first
         target_writer.close()
 
 async def handle_client(reader, writer):
+    """Every exit path (timeouts, resets, bugs) must release the socket, or fds leak until EMFILE."""
+    try:
+        await _handle_client(reader, writer)
+    except Exception as e:
+        logging.debug(f"client handler error: {{e}}")
+    finally:
+        writer.close()
+
+async def _handle_client(reader, writer):
     peername = writer.get_extra_info('peername')
     logging.info(f"New connection from {{peername}}")
 
@@ -186,7 +216,7 @@ async def handle_client(reader, writer):
         tune_socket(sock)
 
     try:
-        first_line = await reader.readline()
+        first_line = await asyncio.wait_for(reader.readline(), HANDSHAKE_TIMEOUT)
     except Exception:
         writer.close()
         return
@@ -216,7 +246,7 @@ async def handle_client(reader, writer):
 
     headers = {{}}
     while True:
-        line = await reader.readline()
+        line = await asyncio.wait_for(reader.readline(), HANDSHAKE_TIMEOUT)
         if not line or line == b'\\r\\n':
             break
         key, sep, value = line.decode(errors='replace').partition(':')
@@ -270,16 +300,7 @@ async def handle_connect(reader, writer, host, port):
     if ssh_sock:
         tune_socket(ssh_sock)
 
-    try:
-        await asyncio.gather(
-            pipe(reader, ssh_writer, "client->ssh"),
-            pipe(ssh_reader, writer, "ssh->client")
-        )
-    except Exception as e:
-        logging.error(f"CONNECT tunnel error: {{e}}")
-    finally:
-        writer.close()
-        ssh_writer.close()
+    await relay(reader, writer, ssh_reader, ssh_writer)
 
 async def handle_websocket(reader, writer):
     writer.write(b'HTTP/1.1 101 Switching Protocols\\r\\n')
@@ -310,16 +331,7 @@ async def handle_websocket(reader, writer):
         tune_socket(ssh_sock)
 
     logging.info(f"WebSocket tunnel established")
-    try:
-        await asyncio.gather(
-            pipe(reader, ssh_writer, "client->ssh"),
-            pipe(ssh_reader, writer, "ssh->client")
-        )
-    except Exception as e:
-        logging.error(f"WebSocket tunnel error: {{e}}")
-    finally:
-        writer.close()
-        ssh_writer.close()
+    await relay(reader, writer, ssh_reader, ssh_writer)
 
 async def main():
     server = await asyncio.start_server(
@@ -357,6 +369,7 @@ ExecStart=/usr/bin/python3 {PROXY_BIN}
 Restart=always
 RestartSec=3
 User=root
+LimitNOFILE=65536
 StandardOutput=append:/var/log/sshauto/proxy.log
 StandardError=append:/var/log/sshauto/proxy.log
 
