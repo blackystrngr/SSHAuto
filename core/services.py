@@ -6,7 +6,6 @@ from core.logger import log
 from core.shell import Shell
 
 SERVICES = [
-    "nginx",
     "dropbear-tunnel",
     "ws-ssh-proxy",
 ]

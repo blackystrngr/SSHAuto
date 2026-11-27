@@ -26,13 +26,8 @@ REQUIRED_PACKAGES = [
     "dropbear", "fail2ban", "iptables", "curl", "git",
     "certbot"
 ]
-# nginx is only installed when the optional nginx_relay feature is explicitly used
 REMOVE_PACKAGES = ["apache2", "ufw", "firewalld"]
 PIP_PACKAGES = []
-
-NGINX_SITES_AVAILABLE = Path("/etc/nginx/sites-available")
-NGINX_SITES_ENABLED = Path("/etc/nginx/sites-enabled")
-NGINX_RELAY_NAME = "sshauto-relay"
 
 SSHD_CONFIG = Path("/etc/ssh/sshd_config")
 SSH_BANNER_PATH = Path("/etc/ssh/sshd_banner")

@@ -18,7 +18,7 @@ class PortManager:
         data[key] = sorted(ports)
         state.save(data)
         self._apply_firewall(port, kind, "add")
-        self._apply_nginx()
+        self._apply_relay()
         log.success(f"Added custom {kind.upper()} port {port}")
 
     def remove(self, port, kind):
@@ -31,7 +31,7 @@ class PortManager:
         data[key] = sorted(ports)
         state.save(data)
         self._apply_firewall(port, kind, "remove")
-        self._apply_nginx()
+        self._apply_relay()
         log.success(f"Removed custom {kind.upper()} port {port}")
 
     def list_all(self):
@@ -53,16 +53,12 @@ class PortManager:
         else:
             Shell.run(f"iptables -D INPUT -p tcp --dport {port} -j ACCEPT", check=False)
 
-    def _apply_nginx(self):
-        """Push the new port list to whichever relay is active."""
-        from pathlib import Path
-
-        from features.python_proxy import NGINX_MARKER, PythonProxyFeature
+    def _apply_relay(self):
+        """The relay binds its ports at startup, so a port change needs a restart (open tunnels
+        reconnect). Certificate, Dropbear and panel settings are re-read live."""
+        from features.python_proxy import PythonProxyFeature
         try:
-            if Path(NGINX_MARKER).exists():
-                from features.nginx_relay import NginxRelayFeature
-                NginxRelayFeature().install()
-            else:
-                PythonProxyFeature().restart()
+            if not PythonProxyFeature().restart():
+                log.error("Relay restart failed; check: journalctl -u ws-ssh-proxy")
         except Exception as exc:
             log.error(f"Failed to apply port change: {exc}")

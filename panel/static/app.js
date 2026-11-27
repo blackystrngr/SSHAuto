@@ -59,8 +59,8 @@ const ICONS = {
   warn: "M12 4l9 16H3zM12 10v4M12 17h.01",
   eye: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12M12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5",
 };
-function icon(name) {
-  return h("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.8",
+function icon(name, cls) {
+  return h("svg", { class: cls, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.8",
     "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" }, h("path", { d: ICONS[name] }));
 }
 
@@ -366,11 +366,12 @@ function pathNodes(o) {
   const up = (u) => svc[u] === "active";
   const tunnels = o.now.tunnels || 0;
   const ports = o.ports || {};
+  const relayCount = o.relay ? o.relay.http.length + o.relay.https.length : "?";
   const nodes = [
     { icon: "phone", name: "Clients", place: "SSH over WebSocket apps", ok: null,
       state: tunnels ? "connected" : "idle", metric: [fmt.int(tunnels), tunnels === 1 ? "tunnel" : "tunnels"] },
-    { icon: "edge", name: "nginx", place: "public ports, TLS", ok: up("nginx"), state: svc.nginx },
-    { icon: "relay", name: "WS proxy", place: `127.0.0.1:${ports.proxy ?? "?"}`, ok: up("ws-ssh-proxy"), state: svc["ws-ssh-proxy"] },
+    { icon: "relay", name: "Relay", ok: up("ws-ssh-proxy"), state: svc["ws-ssh-proxy"],
+      place: `${relayCount} public ports · ${o.relay && o.relay.tls ? "TLS ready" : "no certificate"}` },
     { icon: "key", name: "Dropbear", place: `127.0.0.1:${ports.dropbear ?? "?"}`, ok: up("dropbear-tunnel"), state: svc["dropbear-tunnel"] },
     { icon: "globe", name: "Internet", place: "this server's uplink", ok: null, state: "open",
       metric2: [`${fmt.rate(o.now.rx || 0)}`, "down", `${fmt.rate(o.now.tx || 0)}`, "up"] },
@@ -628,12 +629,19 @@ async function pageNetwork(main, c) {
         try { await runJob(() => DEL("/squid"), "Remove Squid"); loadSquid(); } catch (ex) { fail(ex); } } }, "Turn off"))));
   }
   add(main, [head("Network", "Public ports, how apps connect, and the optional Squid proxy."),
-    block("Relay ports", "nginx listens on these and forwards to the WebSocket proxy.", portsBox,
+    block("Relay ports", "The relay listens on these itself. Each port takes TLS or plain, so either works on any of them.", portsBox,
       h("form", { class: "row", onsubmit: async (e) => {
         e.preventDefault();
         try { await POST("/ports", { kind: kind.value, port: Number(num.value) }); toast(`Port ${num.value} added`); num.value = ""; loadPorts(); } catch (ex) { fail(ex); } } },
         kind, num, h("button", { class: "btn", type: "submit" }, icon("plus"), "Add port"))),
     block("Connection details", null, connBox),
+    block("What the relay accepts", "Detected per connection, on every relay port.", h("ul", { class: "rowlist checks" },
+      [["TLS or plain HTTP", "A client can use either on any port. Old TLS versions and any SNI are accepted."],
+       ["WebSocket", "Any method or path, duplicate Host headers, and both raw payloads and standard WebSocket framing."],
+       ["HTTP CONNECT", "To this server's SSH, or to any public address."],
+       ["Raw SSH", "Straight to Dropbear, also inside TLS. Clients that wait for the server banner are handled too."],
+       ["This panel", "Served on a secret path over HTTPS only."]].map(([t, d]) =>
+        h("li", {}, icon("check"), h("div", { class: "main" }, h("b", {}, t), h("span", {}, d)))))),
     block("Squid proxy", "Optional.", squidBox)]);
   await Promise.all([loadPorts(), loadConn(), loadSquid()]);
 }
@@ -694,7 +702,7 @@ async function pageSystem(main, c) {
       return h("li", {}, h("span", { class: "dot " + (ok ? "good" : missing ? "" : "bad") }),
         h("div", { class: "main" }, h("b", {}, x.label), h("span", {}, `${x.unit} · ${missing ? (x.optional ? "not installed" : "missing") : x.state}`)),
         x.restartable && !missing && h("button", { class: "btn small", onclick: async () => {
-          if (["nginx", "ws-ssh-proxy", "dropbear-tunnel"].includes(x.unit) &&
+          if (["ws-ssh-proxy", "dropbear-tunnel"].includes(x.unit) &&
               !(await confirmBox({ title: `Restart ${x.label}?`, body: "Open tunnels are dropped and clients reconnect.", action: "Restart" }))) return;
           try { await POST(`/services/${x.unit}/restart`); toast(`${x.label} restarted`); loadServices(); } catch (e) { fail(e); } } }, icon("refresh"), "Restart"));
     })));
@@ -707,7 +715,7 @@ async function pageSystem(main, c) {
         h("div", { class: "row", style: { marginBottom: "6px" } }, h("span", { class: "chip " + (d.ok ? "good" : "bad") }, icon(d.ok ? "check" : "warn"), d.ok ? "Everything works" : "Something is wrong"),
           !d.ok && h("button", { class: "btn small primary", onclick: async () => {
             try { await runJob(() => POST("/doctor/repair"), "Repair"); toast("Repair finished"); } catch (e) { fail(e); } runChecks(); loadServices(); } }, "Repair now")),
-        h("ul", { class: "rowlist checks" }, d.checks.map((k) => h("li", {}, icon(k.ok ? "check" : "warn"),
+        h("ul", { class: "rowlist checks" }, d.checks.map((k) => h("li", {}, icon(k.ok ? "check" : "warn", k.ok ? "" : "warn"),
           h("div", { class: "main" }, h("b", { style: { color: k.ok ? "" : "var(--bad-text)" } }, k.name), k.detail && h("span", {}, k.detail))))));
     } catch (e) { clear(healthBox); fail(e); }
   }
@@ -718,7 +726,7 @@ async function pageSystem(main, c) {
   };
   add(main, [head("System", "Services, health checks and tools."),
     block("Services", null, svcBox),
-    block("Health check", "Sends a test connection through nginx, the proxy and Dropbear.", healthBox, h("button", { class: "btn", onclick: runChecks }, icon("refresh"), "Run again")),
+    block("Health check", "Sends a test connection through every relay port, with and without TLS, to Dropbear.", healthBox, h("button", { class: "btn", onclick: runChecks }, icon("refresh"), "Run again")),
     block("Speed test", "Measures this server's download speed.", speedBox, h("button", { class: "btn", onclick: speed }, "Run speed test"))]);
   await loadServices(); runChecks();
   c.every(() => loadServices().catch(() => {}), 8000);
@@ -730,7 +738,7 @@ async function pageLogs(main, c) {
   const lines = h("select", { "aria-label": "Number of lines", style: { width: "auto" } }, [100, 200, 500].map((n) => h("option", { value: n }, `${n} lines`)));
   const live = h("input", { type: "checkbox", id: "live" });
   const pre = h("pre", { class: "log", tabindex: 0, "aria-label": "Log output" });
-  const names = { proxy: "WebSocket proxy", nginx: "nginx", dropbear: "Dropbear", fail2ban: "fail2ban", dnsfilter: "DNS filter", panel: "This panel" };
+  const names = { proxy: "Relay", dropbear: "Dropbear", fail2ban: "fail2ban", dnsfilter: "DNS filter", panel: "This panel" };
   let ready = false;
   async function load() {
     const d = await GET(`/logs?source=${src.value || "proxy"}&lines=${lines.value}`); if (!c.alive) return;

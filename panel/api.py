@@ -25,8 +25,7 @@ from panel.jobs import Busy, JobRunner
 
 SERVICES = [
     # unit(s), label, optional, restartable
-    (("nginx",), "Web relay", False, True),
-    (("ws-ssh-proxy",), "WebSocket proxy", False, True),
+    (("ws-ssh-proxy",), "Relay (TLS, WebSocket, panel)", False, True),
     (("dropbear-tunnel",), "Dropbear SSH", False, True),
     (("ssh", "sshd"), "OpenSSH (admin access)", False, True),
     (("fail2ban",), "Brute-force protection", False, True),
@@ -39,7 +38,6 @@ RESTARTABLE = {u for units, _, _, ok in SERVICES if ok for u in units}
 
 LOG_SOURCES = {
     "proxy": ("file", str(LOG_DIR / "proxy.log")),
-    "nginx": ("unit", "nginx"),
     "dropbear": ("unit", "dropbear-tunnel"),
     "fail2ban": ("unit", "fail2ban"),
     "dnsfilter": ("unit", "sshauto-dnsfilter"),
@@ -205,6 +203,7 @@ class PanelApi:
             "filter": self._filter_summary(),
             "ports": {"proxy": data.get("proxy_port", PROXY_PORT_DEFAULT),
                       "dropbear": data.get("dropbear_port"), "ssh": data.get("ssh_port")},
+            "relay": {**PortManager().list_all(), "tls": bool(data.get("cert_fullchain_path"))},
         }
 
     def metrics(self, req):
@@ -278,7 +277,8 @@ class PanelApi:
     def _ports(self) -> dict:
         d = state.ensure_defaults()
         return dict(PortManager().list_all(), custom_http=d.get("custom_http_ports", []),
-                    custom_https=d.get("custom_https_ports", []))
+                    custom_https=d.get("custom_https_ports", []),
+                    tls=bool(d.get("cert_fullchain_path")), domain=d.get("cert_domain"))
 
     def ports_list(self, req):
         return 200, self._ports()

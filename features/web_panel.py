@@ -5,7 +5,7 @@ import socket
 import time
 import urllib.request
 
-from core.config import APP_ROOT, NGINX_SITES_ENABLED, SYSTEMD_DIR, state
+from core.config import APP_ROOT, SYSTEMD_DIR, state
 from core.logger import log
 from core.shell import Shell
 from features.base import BaseFeature
@@ -17,7 +17,7 @@ PANEL_KEYS = ("panel_port", "panel_path", "panel_user", "panel_hash", "panel_sec
 
 def render_unit(python: str) -> str:
     return f"""[Unit]
-Description=sshauto web panel (loopback only, published by nginx)
+Description=sshauto web panel (loopback only, published by the relay)
 After=network.target
 
 [Service]
@@ -59,7 +59,7 @@ def local_ok(port: int, path: str, timeout: float = 4.0) -> bool:
 class WebPanelFeature(BaseFeature):
     name = "web_panel"
     description = "Web panel (optional): monitor and manage everything from a browser"
-    depends_on = ["packages", "nginx_relay"]
+    depends_on = ["packages", "python_proxy"]
     optional = True
 
     def is_installed(self) -> bool:
@@ -95,17 +95,8 @@ class WebPanelFeature(BaseFeature):
         else:
             raise Exception(f"panel did not start (journalctl -u {UNIT})")
 
-        self._publish()
         log.important(f"Panel URL: {panel_url(state.load())}")
         log.info(f"Or through an SSH tunnel: ssh -L {port}:127.0.0.1:{port} root@<server>  then  http://127.0.0.1:{port}/{path}/")
-
-    def _publish(self) -> None:
-        """(Re)generate the nginx relay so it includes the secret panel path."""
-        from features.nginx_relay import NginxRelayFeature
-        try:
-            NginxRelayFeature().regenerate()
-        except Exception as exc:
-            log.warning(f"could not publish the panel through nginx: {exc}")
 
     def remove(self) -> None:
         Shell.run(f"systemctl disable --now {UNIT}", check=False, timeout=20)
@@ -115,6 +106,4 @@ class WebPanelFeature(BaseFeature):
         for key in PANEL_KEYS:
             data.pop(key, None)
         state.save(data)
-        if (NGINX_SITES_ENABLED / "sshauto-relay.conf").exists():
-            self._publish()
         log.info("Web panel removed.")

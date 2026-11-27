@@ -12,36 +12,45 @@ rules and TLS certificates, then gives you a `kk` dashboard to manage users and 
 ## Architecture
 
 ```
-client ─▶ CDN (Cloudflare, etc.) ─▶ Python proxy, bound directly on every HTTP/HTTPS
-                                     relay port (80, 443, 8080, 2083, ...) — no nginx
-                                        │
-                                        └─▶ Dropbear (127.0.0.1:110)
+client ─▶ CDN (Cloudflare, etc.) or direct ─▶ relay: binds every relay port itself (80, 443, 8080, 2083, ...)
+                                                │   TLS or plain on any port, detected per connection
+                                                ├─▶ Dropbear (127.0.0.1:110)       WebSocket, raw SSH, CONNECT
+                                                └─▶ web panel (127.0.0.1:<port>)   secret path, HTTPS only
 ```
 
-There is **no reverse proxy in front of the Python relay by default.** It binds
-directly, on `0.0.0.0`, to every plain HTTP relay port (`80, 8080, 8880, 2052,
-2082, 2086, 2095` plus any custom ones) and, terminating TLS itself with the
-stored certificate, every HTTPS relay port (`443, 8443, 2053, 2083, 2087, 2096`
-plus custom). This is what lets it accept a request carrying **two `Host:`
-headers**: nginx's HTTP parser rejects those outright (`400`), but this proxy's
-own line-by-line parser keeps the first `Host` and quietly ignores any later
-copies, so a dual-Host WebSocket payload (plain or TLS) still reaches the
-upgrade logic and gets tunneled to Dropbear. A plain (non-upgrade) HTTP request
-is forwarded to whatever its first `Host:` names, with every header line —
-duplicates included — passed through untouched.
+There is **no nginx or any other reverse proxy.** One Python process (`relay/ws_ssh_proxy.py`, uvloop,
+systemd unit `ws-ssh-proxy`) is the only public listener and decides per connection what the client speaks:
+
+| Client sends | Relay does |
+|---|---|
+| TLS handshake (any port, any SNI, TLS 1.0+, any ALPN) | terminates TLS with the stored certificate, then treats the content as below |
+| `Upgrade: websocket` (any method, path, Host; duplicate `Host:` lines allowed) | `101`, then Dropbear. Raw payloads after the 101 (NetMod, HTTP Custom, ...) and standard RFC 6455 framed clients are both detected |
+| `CONNECT host:port` | to this server's SSH (own domain/IP → Dropbear) or any public address |
+| `SSH-...` or nothing at all | raw SSH straight to Dropbear, plain or inside TLS |
+| `GET /<secret>/...` over HTTPS | reverse-proxied to the web panel |
+| plain HTTP for this server | small `200` page (no request loops) |
+| plain HTTP for another host | forwarded, header lines passed through verbatim |
+
+Targets that resolve to private, loopback or link-local addresses are refused for `CONNECT` and HTTP
+forwarding (the only exception is this server's own Dropbear/SSH ports).
+
+Robustness: every connection is torn down from both ends when either side ends, header reads time out,
+`LimitNOFILE=1048576`, and the relay re-opens its iptables ACCEPT rules at start and every minute (they
+are lost when `netfilter-persistent` reloads after a reboot). Certificate, panel and Dropbear settings are
+re-read live; only adding or removing a port restarts the relay.
 
 | Component | Role |
 |---|---|
-| Python proxy | uvloop-based. Binds directly on every HTTP/HTTPS relay port (public), handles WebSocket upgrade, HTTP `CONNECT` and plain HTTP forwarding, dual-Host tolerant, terminates TLS itself (systemd: `ws-ssh-proxy`) |
+| Relay | uvloop; public TLS + plain listener on every relay port, all protocols above (systemd: `ws-ssh-proxy`) |
 | Dropbear | Tunnel SSH backend, loopback only (systemd: `dropbear-tunnel`) |
 | OpenSSH | Direct admin access on its own port, with a random banner |
 | fail2ban | Jails for sshd and Dropbear |
 | iptables | Rules are added, never flushed |
-| Certificates | Cloudflare Origin Certificate (15 years) or self-signed, chosen from an interactive menu |
+| Certificates | Cloudflare Origin Certificate (15 years) or self-signed |
 | udpgw | Optional UDP forwarding via badvpn-udpgw |
 | Squid | Optional authenticated proxy, see below |
-| Content filter | Optional DNS blocking of ads, malware, phishing and cryptominers for tunnel traffic, see below |
-| nginx (`nginx_relay`) | **Optional, off by default.** Classic reverse-proxy mode: nginx becomes the public listener and the Python proxy drops back to loopback-only. Dual-Host stops working in this mode (that limitation is nginx's). Only turn this on if you need nginx for something else (e.g. the web panel) |
+| Content filter | Optional DNS blocking of ads, malware, phishing and cryptominers, see below |
+| Web panel | Optional browser UI, see below |
 
 ## Install
 
@@ -58,7 +67,7 @@ sudo python3 main.py install
 ```
 
 You will be asked for a domain and a certificate type. The installer then verifies the
-full tunnel path (nginx → proxy → Dropbear) and repairs what it can. When it finishes, type `kk`.
+full tunnel path (relay → Dropbear, with and without TLS) and repairs what it can. When it finishes, type `kk`.
 
 ## Commands
 
@@ -72,7 +81,7 @@ sudo python3 main.py doctor              # verify tunnel end-to-end and auto-rep
 sudo python3 main.py status              # per-feature install status
 sudo python3 main.py cert                # re-run the certificate menu
 sudo python3 main.py uninstall           # remove everything sshauto built (asks first)
-sudo python3 main.py uninstall --yes --keep-users --purge-packages   # flags: skip prompt / keep accounts / apt-purge nginx, dropbear, fail2ban, squid
+sudo python3 main.py uninstall --yes --keep-users --purge-packages   # flags: skip prompt / keep accounts / apt-purge dropbear, fail2ban, squid
 sudo python3 main.py dashboard           # same as `kk`
 python3 main.py --version
 ```
@@ -137,13 +146,14 @@ A browser UI to monitor and manage the server: live tunnel path, throughput char
 users (create, extend, lock, delete), relay ports, Squid, content filter, service restarts, health
 check with one-click repair, speed test, logs. Opt in with `install --panel` or `main.py panel`.
 
-- The panel server listens on `127.0.0.1` only. nginx publishes it under a secret URL path on the
-  existing relay ports; the URL and a generated admin password are printed once at install.
+- The panel server listens on `127.0.0.1` only. The relay publishes it under a secret URL path on the
+  HTTPS relay ports (never over plain HTTP, unless a CDN reports `X-Forwarded-Proto: https`); the URL and
+  a generated admin password are printed once at install.
   Lost password: `sudo python3 main.py panel --reset-password`.
 - Sign-in: scrypt password hash, signed HttpOnly/SameSite=Strict session cookie (12 h), CSRF header
   on every API call, strict CSP, login rate limiting. Changing the password signs out all sessions.
-- Behind Cloudflare the per-IP login limit is weak (nginx sees the CDN address); the global limit and
-  the secret path still apply. For stricter access, `main.py panel --remove` and reach it by
+- Behind Cloudflare the real client IP is taken from `CF-Connecting-IP` (only when the connection comes from a
+  Cloudflare address), so the per-IP login limit works; the global limit and the secret path also apply. For stricter access, `main.py panel --remove` and reach it by
   `ssh -L 8088:127.0.0.1:<panel_port> ...` instead.
 - No build step: static files in `panel/static/`, Python standard library only.
 
@@ -167,7 +177,7 @@ core/               config + state store, logger, shell wrapper, exceptions, plu
 features/           one module per installable feature (auto-discovered)
 panel/              optional web panel (server, API, auth, metrics, static UI)
 dashboard/          the `kk` menu: users, ports, monitor, UI helpers
-templates/          nginx config templates
+relay/              the relay (ws_ssh_proxy.py), installed to /usr/local/bin
 data/banners.txt    pool of SSH banners
 tests/              pytest suite
 ```

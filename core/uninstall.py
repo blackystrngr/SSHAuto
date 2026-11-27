@@ -13,12 +13,12 @@ STATE_DIR = Path("/var/lib/sshauto")
 KK_LAUNCHER = Path("/usr/local/bin/kk")
 INSTALL_DIR = Path("/opt/sshauto")
 LEGACY_UNITS = ("ws-ssh-proxy", "sshauto-proxy", "dropbear-tunnel", "badvpn-udpgw", "sshauto-dnsfilter", "sshauto-panel")
-PURGE_PACKAGES = ["nginx", "dropbear", "fail2ban", "squid"]
+PURGE_PACKAGES = ["dropbear", "fail2ban", "squid"]
 
 PLAN = """This will remove everything sshauto created:
   - tunnel users (group '{group}') and their home directories{users_note}
   - services: ws-ssh-proxy, dropbear-tunnel, badvpn-udpgw, optional Squid, DNS content filter and web panel
-  - nginx relay site, fail2ban jails, OpenSSH hardening + banner (SSH port is left as is)
+  - fail2ban jails, OpenSSH hardening + banner (SSH port is left as is)
   - certificates, state ({state}), logs ({logs}), the 'kk' command{app_note}
   - custom relay port firewall rules (base ports stay open: other services may use them)
 {pkg_note}"""
@@ -51,7 +51,7 @@ def run(*, yes: bool = False, purge_packages: bool = False, keep_users: bool = F
         users_note=" (KEPT: --keep-users)" if keep_users else f" ({len(_tunnel_users())} found)",
         app_note=f", and {INSTALL_DIR}" if app_removable else "",
         pkg_note=("  - APT PACKAGES PURGED: " + ", ".join(PURGE_PACKAGES) +
-                  "  (nginx/squid may be used by other apps!)") if purge_packages else "",
+                  "  (squid may be used by other apps!)") if purge_packages else "",
     ))
     if not yes and input("Type 'yes' to continue: ").strip().lower() != "yes":
         log.warning("aborted, nothing changed")
@@ -75,6 +75,8 @@ def run(*, yes: bool = False, purge_packages: bool = False, keep_users: bool = F
     for unit in LEGACY_UNITS:
         Shell.run(f"systemctl disable --now {unit}", check=False, timeout=20)
         Path(f"/etc/systemd/system/{unit}.service").unlink(missing_ok=True)
+    for old in ("sites-enabled", "sites-available"):          # left by versions that used nginx
+        Path(f"/etc/nginx/{old}/sshauto-relay.conf").unlink(missing_ok=True)
     for leftover in ("/usr/local/bin/ws_ssh_proxy.py", "/usr/local/bin/ws_proxy.py",
                      "/usr/local/bin/badvpn-udpgw"):
         Path(leftover).unlink(missing_ok=True)

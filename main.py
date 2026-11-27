@@ -280,7 +280,7 @@ def build_parser():
     p.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation")
     p.add_argument("--keep-users", action="store_true", help="keep tunnel user accounts")
     p.add_argument("--purge-packages", action="store_true",
-                   help="also apt-purge nginx, dropbear, fail2ban, squid")
+                   help="also apt-purge dropbear, fail2ban, squid")
     p.set_defaults(func=cmd_uninstall)
     sub.add_parser("dashboard", help="open dashboard").set_defaults(func=cmd_dashboard)
     return parser

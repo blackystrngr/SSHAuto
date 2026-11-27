@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **nginx removed completely** (feature, templates, packages, panel snippet). The relay is the only public listener.
+- New relay (`relay/ws_ssh_proxy.py`, a real module with tests instead of generated code): binds every relay port, sniffs TLS vs plain vs raw SSH per connection, so TLS works on any port and plain works on any port; TLS 1.0+, no ALPN restriction, SNI ignored; SSH-over-TLS; WebSocket with `Sec-WebSocket-Accept`, raw-after-101 and RFC 6455 framed clients; `CONNECT` to own address maps to Dropbear; silent (server-first) clients get Dropbear's banner.
+- The web panel is served by the relay itself (secret path, HTTPS only, real client IP from Cloudflare).
+- Doctor probes every relay port with and without TLS, firewall rules, and the panel through the relay.
+- Panel website: tunnel path is Clients → Relay → Dropbear → Internet; new "What the relay accepts" section; relay TLS state.
+
+### Fixed
+- Connections failing after a reboot when iptables rules were reloaded without the relay ports (relay re-applies them).
+- HTTP forwarding could loop back into the relay itself and exhaust file descriptors; own addresses now get a page, private targets are refused, loop header added.
+- Descriptor leaks (half-closed tunnels, silent clients, header slow-loris), `LimitNOFILE` raised.
+- Old nginx site files are removed on install/uninstall.
+
 ## 1.0.0
 
 ### Added

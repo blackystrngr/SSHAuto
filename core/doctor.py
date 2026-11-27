@@ -1,9 +1,6 @@
 """End-to-end self check (and repair) of the tunnel path.
 
-Default mode (no nginx_relay installed):
-    client ─▶ ws proxy, bound directly on each HTTP/HTTPS relay port ─▶ dropbear
-Classic mode (nginx_relay installed):
-    client ─▶ nginx :80/:443 ─▶ ws proxy 127.0.0.1:<proxy_port> ─▶ dropbear
+    client ─▶ relay (public ports, TLS or plain) ─▶ dropbear 127.0.0.1:<dropbear_port>
 """
 from __future__ import annotations
 
@@ -12,7 +9,7 @@ import time
 from dataclasses import dataclass
 
 from core import blocklists
-from core.config import DROPBEAR_PORT_DEFAULT, HTTP_PORTS, HTTPS_PORTS, PROXY_PORT_DEFAULT, SYSTEMD_DIR, state
+from core.config import DROPBEAR_PORT_DEFAULT, HTTP_PORTS, HTTPS_PORTS, SYSTEMD_DIR, state
 from core.logger import log
 from core.shell import Shell
 
@@ -96,24 +93,43 @@ def _publicly_listening(port: int) -> bool:
     return False
 
 
-def _nginx_relay_active() -> bool:
-    from pathlib import Path
+def _closed_ports(ports: list[int]) -> list[int]:
+    """Relay ports that iptables would not accept."""
+    missing = []
+    for port in ports:
+        if not Shell.run(f"iptables -C INPUT -p tcp --dport {port} -j ACCEPT", check=False, timeout=10).ok:
+            missing.append(port)
+    return missing
 
-    from features.python_proxy import NGINX_MARKER
-    return Path(NGINX_MARKER).exists()
+
+def https_get(host: str, port: int, path: str, timeout: float = 5.0) -> tuple[bool, str]:
+    """GET over TLS (certificate not verified: this talks to ourselves)."""
+    import ssl as _ssl
+    try:
+        ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+        with socket.create_connection((host, port), timeout=timeout) as raw, ctx.wrap_socket(raw) as sock:
+            sock.settimeout(timeout)
+            sock.sendall(f"GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
+            buf = b""
+            while b"\r\n" not in buf:
+                chunk = sock.recv(1024)
+                if not chunk:
+                    break
+                buf += chunk
+            line = buf.split(b"\r\n")[0].decode(errors="replace")
+            return " 200 " in line, line
+    except OSError as exc:
+        return False, str(exc)
 
 
 def run_checks() -> list[Check]:
     data = state.ensure_defaults()
-    proxy_port = int(data.get("proxy_port", PROXY_PORT_DEFAULT))
     dropbear_port = int(data.get("dropbear_port", DROPBEAR_PORT_DEFAULT))
     checks: list[Check] = []
 
-    units = [("dropbear-tunnel", "dropbear_service"), ("ws-ssh-proxy", "python_proxy")]
-    classic = _nginx_relay_active()
-    if classic:
-        units.append(("nginx", "nginx_relay"))
-    for unit, feature in units:
+    for unit, feature in (("dropbear-tunnel", "dropbear_service"), ("ws-ssh-proxy", "python_proxy")):
         ok = Shell.run(f"systemctl is-active {unit}", check=False, timeout=10).ok
         checks.append(Check(f"service {unit}", ok, "" if ok else "not active", feature))
 
@@ -121,23 +137,24 @@ def run_checks() -> list[Check]:
     checks.append(Check(f"dropbear :{dropbear_port} loopback only", not exposed,
                         "listening on a public address" if exposed else "", "dropbear_service"))
 
-    if classic:
-        ok, detail = ws_handshake("127.0.0.1", proxy_port)
-        checks.append(Check(f"ws proxy → dropbear (:{proxy_port})", ok, detail, "python_proxy"))
-        ok, detail = ws_handshake("127.0.0.1", 80)
-        checks.append(Check("nginx :80 → ws proxy → dropbear", ok, detail, "nginx_relay"))
+    http_ports = sorted(HTTP_PORTS | set(data.get("custom_http_ports", [])))
+    https_ports = sorted(HTTPS_PORTS | set(data.get("custom_https_ports", [])))
+    for p in http_ports:
+        ok, detail = ws_handshake("127.0.0.1", p)
+        checks.append(Check(f"relay :{p} WebSocket → dropbear", ok, detail, "python_proxy"))
+    if data.get("cert_fullchain_path"):
+        for p in https_ports:
+            ok, detail = ws_handshake_tls("127.0.0.1", p)
+            checks.append(Check(f"relay :{p} TLS WebSocket → dropbear", ok, detail, "python_proxy"))
+        if http_ports:                                    # protocol sniffing: TLS on a "plain" port
+            ok, detail = ws_handshake_tls("127.0.0.1", http_ports[0])
+            checks.append(Check(f"relay :{http_ports[0]} accepts TLS too", ok, detail, "python_proxy"))
     else:
-        http_ports = sorted(HTTP_PORTS | set(data.get("custom_http_ports", [])))
-        https_ports = sorted(HTTPS_PORTS | set(data.get("custom_https_ports", [])))
-        for p in http_ports:
-            ok, detail = ws_handshake("127.0.0.1", p)
-            checks.append(Check(f"direct proxy :{p} → dropbear", ok, detail, "python_proxy"))
-        if data.get("cert_fullchain_path"):
-            for p in https_ports:
-                ok, detail = ws_handshake_tls("127.0.0.1", p)
-                checks.append(Check(f"direct proxy :{p} (TLS) → dropbear", ok, detail, "python_proxy"))
-        else:
-            checks.append(Check("HTTPS relay ports", False, "no certificate issued yet", "certificates"))
+        checks.append(Check("TLS relay ports", False, "no certificate issued yet", "certificates"))
+
+    closed = _closed_ports(http_ports + https_ports)
+    checks.append(Check("firewall allows the relay ports", not closed,
+                        f"blocked: {', '.join(map(str, closed))}" if closed else "", "firewall"))
 
     checks.extend(_filter_checks())
     checks.extend(_panel_checks(data))
@@ -154,6 +171,9 @@ def _panel_checks(data: dict) -> list[Check]:
     ok = bool(data.get("panel_port") and data.get("panel_path")) and \
         local_ok(int(data["panel_port"]), data["panel_path"])
     checks.append(Check("panel answers", ok, "" if ok else "no HTTP 200 on loopback", "web_panel"))
+    if ok:
+        ok, detail = https_get("127.0.0.1", 443, f"/{data['panel_path']}/")
+        checks.append(Check("panel reachable through the relay (:443)", ok, "" if ok else detail, "python_proxy"))
     return checks
 
 

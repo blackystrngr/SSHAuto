@@ -1,4 +1,4 @@
-"""Loopback-only HTTP server for the panel. nginx publishes it under a secret path."""
+"""Loopback-only HTTP server for the panel. the relay publishes it under a secret path (HTTPS only)."""
 from __future__ import annotations
 
 import json
