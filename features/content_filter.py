@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 from pathlib import Path
 
 from core import blocklists
@@ -169,10 +170,14 @@ class ContentFilterFeature(BaseFeature):
         lines.append(f"private networks: {'blocked' if private else 'allowed'}")
         return lines
 
-    def _verify(self) -> None:
-        if blocklists.dns_rcode(FILTER_ADDR, "cloudflare.com") is None:
-            raise Exception(f"DNS filter does not answer on {FILTER_ADDR}:53 "
-                            f"(journalctl -u {DNSFILTER_UNIT})")
+    def _verify(self, wait: float = 60.0) -> None:
+        # dnsmasq loads ~400k list entries before it answers, which takes several seconds on a small VPS
+        deadline = time.monotonic() + wait
+        while blocklists.dns_rcode(FILTER_ADDR, "cloudflare.com") is None:
+            if time.monotonic() >= deadline:
+                raise Exception(f"DNS filter does not answer on {FILTER_ADDR}:53 "
+                                f"(journalctl -u {DNSFILTER_UNIT})")
+            time.sleep(2)
         sample = blocklists.sample_blocked_domain()
         if sample and blocklists.dns_rcode(FILTER_ADDR, sample) != 3:
             raise Exception(f"DNS filter is not blocking (expected NXDOMAIN for {sample})")

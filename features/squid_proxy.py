@@ -55,6 +55,20 @@ def _htpasswd_line(user: str, password: str) -> str:
     return f"{user}:{{SHA}}{digest}\n"
 
 
+def _password_entries(user: str, password: str) -> list[str]:
+    """Candidate htpasswd lines, most portable first. Some squid builds (e.g. GnuTLS ones on Ubuntu 24.04)
+    do not understand {SHA}, so try apr1 / sha512 crypt (hashed via openssl, password on stdin) first."""
+    entries = []
+    for flag in ("-apr1", "-6"):
+        res = Shell.run(f"openssl passwd {flag} -stdin", check=False, timeout=10,
+                        input_text=f"{password}\n")
+        digest = res.stdout.strip()
+        if res.ok and digest.startswith("$"):
+            entries.append(f"{user}:{digest}\n")
+    entries.append(_htpasswd_line(user, password))
+    return entries
+
+
 def _fw_rule(action: str, port: int) -> None:
     flag = {"add": "-I", "del": "-D"}[action]
     present = Shell.run(f"iptables -C INPUT -p tcp --dport {port} -j ACCEPT", check=False).ok
@@ -87,17 +101,20 @@ class SquidProxyFeature(BaseFeature):
                   timeout=300, retries=1)
         helper = _find_helper()
 
-        # password file (squid helper runs as user 'proxy')
-        SQUID_PASSWD.write_text(_htpasswd_line(user, password))
-        try:
-            shutil.chown(SQUID_PASSWD, "root", "proxy")
-        except (LookupError, OSError):
-            pass
-        SQUID_PASSWD.chmod(0o640)
-
-        check = Shell.run(f"{helper} {SQUID_PASSWD}", check=False, timeout=10,
-                          input_text=f"{user} {password}\n")
-        if "OK" not in check.stdout:
+        # password file (squid helper runs as user 'proxy'); use the first hash format the helper accepts
+        check = None
+        for entry in _password_entries(user, password):
+            SQUID_PASSWD.write_text(entry)
+            try:
+                shutil.chown(SQUID_PASSWD, "root", "proxy")
+            except (LookupError, OSError):
+                pass
+            SQUID_PASSWD.chmod(0o640)
+            check = Shell.run(f"{helper} {SQUID_PASSWD}", check=False, timeout=10,
+                              input_text=f"{user} {password}\n")
+            if "OK" in check.stdout:
+                break
+        else:
             raise Exception(f"squid auth helper rejected the credentials: {check.stdout.strip()}")
 
         config = f"""{MARKER} – do not edit by hand

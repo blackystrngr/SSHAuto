@@ -25,3 +25,14 @@ def test_validate_rejects(user, pw, port):
 
 def test_validate_accepts_defaults():
     _validate(SQUID_USER_DEFAULT, SQUID_PASS_DEFAULT, 3128)
+
+
+def test_password_entries_prefers_crypt_and_keeps_sha_fallback(monkeypatch):
+    from types import SimpleNamespace
+
+    from features import squid_proxy as sp
+
+    monkeypatch.setattr(sp.Shell, "run", lambda *a, **k: SimpleNamespace(
+        ok=True, stdout="$apr1$salt$hash\n", stderr=""))
+    got = sp._password_entries("u", "p")
+    assert got[0].startswith("u:$apr1$") and got[-1].startswith("u:{SHA}")
