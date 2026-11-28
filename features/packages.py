@@ -32,7 +32,7 @@ class PackagesFeature(BaseFeature):
 
     def _core_check_list(self):
         return ["dropbear", "openssh-server", "fail2ban",
-                "certbot", "python3", "iptables", "git"]
+                "certbot", "python3", "iptables", "ufw", "git"]
 
     def _dpkg_installed(self, pkg):
         result = Shell.run(f"dpkg -s {pkg}", check=False)
@@ -44,7 +44,7 @@ class PackagesFeature(BaseFeature):
             log.info("no conflicting packages")
             return
         log.important(f"purging conflicting packages: {', '.join(present)}")
-        for svc in ("apache2", "ufw", "firewalld"):
+        for svc in ("apache2", "firewalld"):
             Shell.run(f"systemctl stop {svc}", check=False)
             Shell.run(f"systemctl disable {svc}", check=False)
         Shell.run("DEBIAN_FRONTEND=noninteractive apt-get purge -y " + " ".join(present),

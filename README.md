@@ -3,7 +3,7 @@
 [![CI](https://github.com/blackystrngr/SSHAuto/actions/workflows/ci.yml/badge.svg)](https://github.com/blackystrngr/SSHAuto/actions/workflows/ci.yml)
 
 SSH-over-WebSocket relay autoscript for Debian/Ubuntu VPS. One command installs and
-wires together a Python WebSocket proxy, Dropbear, OpenSSH, iptables
+wires together a Python WebSocket proxy, Dropbear, OpenSSH, ufw
 rules and TLS certificates, then gives you a `kk` dashboard to manage users and ports.
 fail2ban brute-force protection is available too, off by default — turn it on from the
 web panel or with `main.py fail2ban`.
@@ -38,8 +38,7 @@ so an SSH account (username + password) is required for any traffic. udpgw liste
 and is reached through the authenticated SSH tunnel.
 
 Robustness: every connection is torn down from both ends when either side ends, header reads time out,
-`LimitNOFILE=1048576`, and the relay re-opens its iptables ACCEPT rules at start and every minute (they
-are lost when `netfilter-persistent` reloads after a reboot). Certificate, panel and Dropbear settings are
+`LimitNOFILE=1048576`, and the relay re-allows its ports in ufw at start and every minute if any are missing (it never deletes rules). Certificate, panel and Dropbear settings are
 re-read live; only adding or removing a port restarts the relay.
 
 | Component | Role |
@@ -48,7 +47,7 @@ re-read live; only adding or removing a port restarts the relay.
 | Dropbear | Tunnel SSH backend, loopback only (systemd: `dropbear-tunnel`) |
 | OpenSSH | Direct admin access on its own port, with a random banner |
 | fail2ban | Optional jails for sshd and Dropbear, see below |
-| iptables | Rules are added, never flushed or deleted (not even on uninstall) |
+| Firewall | ufw: SSH is allowed first, then ufw is enabled; rules are only added, never reset or deleted (not even on uninstall) |
 | Certificates | Cloudflare Origin Certificate (15 years) or self-signed |
 | udpgw | Optional UDP forwarding via badvpn-udpgw (loopback only, via the SSH tunnel) |
 | Squid | Optional authenticated proxy, see below |
@@ -85,7 +84,7 @@ sudo python3 main.py fail2ban            # turn fail2ban jails on (--remove: tur
 sudo python3 main.py doctor              # verify tunnel end-to-end and auto-repair (--no-heal: check only)
 sudo python3 main.py status              # per-feature install status
 sudo python3 main.py cert                # re-run the certificate menu
-sudo python3 main.py uninstall           # remove sshauto (asks first; iptables rules, certificates and udpgw are kept)
+sudo python3 main.py uninstall           # remove sshauto (asks first; ufw rules, certificates and udpgw are kept)
 sudo python3 main.py uninstall --yes --keep-users --purge-packages   # flags: skip prompt / keep accounts / apt-purge dropbear, squid
 sudo python3 main.py dashboard           # same as `kk`
 python3 main.py --version

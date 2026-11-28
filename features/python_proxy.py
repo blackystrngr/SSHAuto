@@ -14,7 +14,7 @@ SERVICE_PATH = Path(f"/etc/systemd/system/{SERVICE_NAME}")
 
 UNIT = """[Unit]
 Description=sshauto relay (TLS + WebSocket + CONNECT + raw SSH + web panel, direct public bind)
-After=network-online.target dropbear-tunnel.service netfilter-persistent.service iptables.service
+After=network-online.target dropbear-tunnel.service ufw.service
 Wants=dropbear-tunnel.service
 
 [Service]

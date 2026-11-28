@@ -1,3 +1,4 @@
+from core import ufw
 from core.config import HTTP_PORTS, HTTPS_PORTS, SSH_PORT_DEFAULT, state
 from core.logger import log
 from core.shell import Shell
@@ -9,29 +10,24 @@ class FirewallFeature(BaseFeature):
     depends_on = ["packages"]
 
     def is_installed(self) -> bool:
-        # Check if at least our SSH rule exists
-        res = Shell.run("iptables -C INPUT -p tcp --dport 22 -j ACCEPT", check=False)
-        return res.ok
+        return ufw.is_active() and SSH_PORT_DEFAULT in ufw.allowed_tcp_ports()
 
     def install(self) -> None:
-        log.info("Adding firewall rules (no flush) ...")
+        log.info("Configuring ufw (rules are only added, never reset or deleted) ...")
+        Shell.run("DEBIAN_FRONTEND=noninteractive apt-get install -y ufw", check=False, timeout=180)
 
         data = state.ensure_defaults()
         ssh_port = data.get("ssh_port", SSH_PORT_DEFAULT)
-        http_ports = sorted(HTTP_PORTS | set(data.get("custom_http_ports", [])))
-        https_ports = sorted(HTTPS_PORTS | set(data.get("custom_https_ports", [])))
-        all_ports = set(http_ports + https_ports + [ssh_port])
+        http_ports = HTTP_PORTS | set(data.get("custom_http_ports", []))
+        https_ports = HTTPS_PORTS | set(data.get("custom_https_ports", []))
 
-        for port in all_ports:
-            Shell.run(f"iptables -I INPUT -p tcp --dport {port} -j ACCEPT", check=False)
+        # SSH first so enabling ufw can never lock us out
+        ufw.ensure_enabled({ssh_port, SSH_PORT_DEFAULT})
+        ufw.ensure_ports(http_ports | https_ports | {ssh_port})
 
-        # Allow loopback and established connections
-        Shell.run("iptables -I INPUT -i lo -j ACCEPT", check=False)
-        Shell.run("iptables -I INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT", check=False)
-
-        log.success("Firewall rules added (existing rules preserved).")
-        log.important("If you use a VPN, ensure its ports are also allowed.")
+        log.success("ufw active; relay and SSH ports allowed.")
+        log.important("If you use a VPN, ensure its ports are also allowed (ufw allow <port>/tcp).")
 
     def remove(self) -> None:
-        # iptables rules are never flushed or deleted, not even on uninstall.
-        log.info("iptables rules left untouched.")
+        # ufw rules and state are never reset, disabled or deleted, not even on uninstall.
+        log.info("ufw rules left untouched.")

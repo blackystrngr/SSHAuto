@@ -94,12 +94,12 @@ def _publicly_listening(port: int) -> bool:
 
 
 def _closed_ports(ports: list[int]) -> list[int]:
-    """Relay ports that iptables would not accept."""
-    missing = []
-    for port in ports:
-        if not Shell.run(f"iptables -C INPUT -p tcp --dport {port} -j ACCEPT", check=False, timeout=10).ok:
-            missing.append(port)
-    return missing
+    """Relay ports that ufw would not accept (none if ufw is inactive)."""
+    from core import ufw
+    if not ufw.is_active():
+        return []
+    have = ufw.allowed_tcp_ports()
+    return [p for p in ports if p not in have]
 
 
 def https_get(host: str, port: int, path: str, timeout: float = 5.0) -> tuple[bool, str]:

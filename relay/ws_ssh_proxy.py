@@ -35,6 +35,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import socket
 import ssl
 import struct
@@ -773,20 +774,28 @@ class Relay:
 
     @staticmethod
     def open_firewall(ports) -> None:
-        """Make sure every listening port is accepted by iptables. Idempotent; also re-applied
-        periodically because netfilter-persistent can reload rules after we start."""
-        for tool in ("iptables", "ip6tables"):
-            for port in ports:
-                rule = ["-p", "tcp", "--dport", str(port), "-j", "ACCEPT"]
-                try:
-                    have = subprocess.run([tool, "-w", "5", "-C", "INPUT", *rule], capture_output=True, timeout=10)
-                    if have.returncode == 1:
-                        subprocess.run([tool, "-w", "5", "-I", "INPUT", "1", *rule], capture_output=True, timeout=10)
-                        log.warning("opened %s port %s", tool, port)
-                    elif have.returncode not in (0, 1):
-                        break                    # tool missing or unusable: skip it
-                except (OSError, subprocess.SubprocessError):
-                    break
+        """Make sure every listening port is allowed by ufw (add-only, idempotent). Re-applied
+        periodically in case rules were changed after we started. Does nothing if ufw is
+        missing or inactive."""
+        try:
+            st = subprocess.run(["ufw", "status"], capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            return
+        if st.returncode != 0 or "Status: active" not in st.stdout:
+            return
+        have = set()
+        for line in st.stdout.splitlines():
+            m = re.match(r"^(\d+)(?:/(tcp|udp))?(?:\s+\(v6\))?\s+ALLOW\b", line.strip())
+            if m and m.group(2) in (None, "tcp"):
+                have.add(int(m.group(1)))
+        for port in ports:
+            if port in have:
+                continue
+            try:
+                subprocess.run(["ufw", "allow", f"{port}/tcp"], capture_output=True, timeout=30)
+                log.warning("opened ufw port %s", port)
+            except (OSError, subprocess.SubprocessError):
+                return
 
     async def firewall_loop(self, ports) -> None:
         loop = asyncio.get_running_loop()

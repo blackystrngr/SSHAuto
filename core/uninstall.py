@@ -14,14 +14,14 @@ KK_LAUNCHER = Path("/usr/local/bin/kk")
 INSTALL_DIR = Path("/opt/sshauto")
 CERT_DIR = Path("/var/lib/sshauto/certs")
 LEGACY_UNITS = ("ws-ssh-proxy", "sshauto-proxy", "dropbear-tunnel", "sshauto-dnsfilter", "sshauto-panel")
-PURGE_PACKAGES = ["dropbear", "squid"]   # fail2ban is kept: purging it drops its iptables chains
+PURGE_PACKAGES = ["dropbear", "squid"]   # fail2ban is kept: purging it drops its firewall bans
 
 PLAN = """This will remove everything sshauto created:
   - tunnel users (group '{group}') and their home directories{users_note}
   - services: ws-ssh-proxy, dropbear-tunnel, optional Squid, DNS content filter and web panel
   - fail2ban jail config, OpenSSH hardening + banner (SSH port is left as is)
   - state ({state}, except certificates), logs ({logs}), the 'kk' command{app_note}
-KEPT: all iptables rules (never flushed or deleted), certificates ({certs}), udpgw (badvpn-udpgw)
+KEPT: all ufw/firewall rules (never reset or deleted), certificates ({certs}), udpgw (badvpn-udpgw)
 {pkg_note}"""
 
 

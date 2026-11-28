@@ -41,6 +41,9 @@ c_cyan "==> Installing bootstrap dependencies"
 apt-get update -y
 apt-get install -y python3 python3-pip git curl wget ca-certificates
 
+c_cyan "==> Removing any stuck Git proxy settings"
+git config --global --unset http.proxy 2>/dev/null || true
+git config --global --unset https.proxy 2>/dev/null || true
 
 c_cyan "==> Fetching sshauto into ${APP_ROOT}"
 rm -rf "${APP_ROOT}"
