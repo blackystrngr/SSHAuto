@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Security
+- Relay is no longer an open proxy: `CONNECT` is accepted only for this server's own address (-> Dropbear/sshd), and plain HTTP for other hosts gets a static 200 page instead of being forwarded. Every tunnel now requires an SSH account.
+- udpgw binds `127.0.0.1:7300` instead of `0.0.0.0:7300` (it has no authentication); clients reach it through the SSH tunnel. Existing units bound to 0.0.0.0 are rewritten on the next install run.
+
 ### Changed
 - **nginx removed completely** (feature, templates, packages, panel snippet). The relay is the only public listener.
 - New relay (`relay/ws_ssh_proxy.py`, a real module with tests instead of generated code): binds every relay port, sniffs TLS vs plain vs raw SSH per connection, so TLS works on any port and plain works on any port; TLS 1.0+, no ALPN restriction, SNI ignored; SSH-over-TLS; WebSocket with `Sec-WebSocket-Accept`, raw-after-101 and RFC 6455 framed clients; `CONNECT` to own address maps to Dropbear; silent (server-first) clients get Dropbear's banner.

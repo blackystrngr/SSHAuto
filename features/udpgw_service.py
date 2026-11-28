@@ -15,8 +15,11 @@ class UdpgwServiceFeature(BaseFeature):
     idempotent = True
 
     def is_installed(self) -> bool:
-        return Path("/usr/local/bin/badvpn-udpgw").exists() and \
-               Path("/etc/systemd/system/badvpn-udpgw.service").exists()
+        unit = Path("/etc/systemd/system/badvpn-udpgw.service")
+        # An older unit bound 0.0.0.0:7300 (unauthenticated, public); treat it as not installed so a
+        # normal re-run rewrites it to loopback.
+        return Path("/usr/local/bin/badvpn-udpgw").exists() and unit.exists() and \
+               "--listen-addr 127.0.0.1:7300" in unit.read_text()
 
     def install(self) -> None:
         log.info("Ensuring compilation tools are available...")
@@ -41,13 +44,14 @@ class UdpgwServiceFeature(BaseFeature):
         else:
             log.info("badvpn-udpgw binary already available, skipping compilation.")
 
-        # Bind to 0.0.0.0:7300 (public)
+        # Loopback only: udpgw has no authentication. Clients reach it through their SSH tunnel
+        # (the SSH client connects to 127.0.0.1:7300 on the server side).
         service_content = """[Unit]
 Description=BadVPN UDP Gateway Daemon
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/badvpn-udpgw --loglevel warning --listen-addr 0.0.0.0:7300 --max-clients 1000 --max-connections-for-client 10
+ExecStart=/usr/local/bin/badvpn-udpgw --loglevel warning --listen-addr 127.0.0.1:7300 --max-clients 1000 --max-connections-for-client 10
 Restart=always
 RestartSec=3
 User=root
@@ -61,8 +65,8 @@ WantedBy=multi-user.target
         Shell.run("systemctl enable badvpn-udpgw", check=True)
         Shell.run("systemctl restart badvpn-udpgw", check=True)
 
-        log.success("UDP Gateway active on 0.0.0.0:7300.")
-        log.important("IMPORTANT: Open UDP port 7300 in your VPS provider's firewall.")
+        log.success("UDP Gateway active on 127.0.0.1:7300 (reachable only through an authenticated SSH tunnel).")
+        log.important("Do NOT open port 7300 in any firewall. In your client set the UDPGW address to 127.0.0.1:7300.")
 
     def remove(self) -> None:
         Shell.run("systemctl stop badvpn-udpgw", check=False, timeout=10)

@@ -25,14 +25,15 @@ systemd unit `ws-ssh-proxy`) is the only public listener and decides per connect
 |---|---|
 | TLS handshake (any port, any SNI, TLS 1.0+, any ALPN) | terminates TLS with the stored certificate, then treats the content as below |
 | `Upgrade: websocket` (any method, path, Host; duplicate `Host:` lines allowed) | `101`, then Dropbear. Raw payloads after the 101 (NetMod, HTTP Custom, ...) and standard RFC 6455 framed clients are both detected |
-| `CONNECT host:port` | to this server's SSH (own domain/IP → Dropbear) or any public address |
+| `CONNECT host:port` | only to this server's SSH (own domain/IP → Dropbear/sshd); every other target is refused |
 | `SSH-...` or nothing at all | raw SSH straight to Dropbear, plain or inside TLS |
 | `GET /<secret>/...` over HTTPS | reverse-proxied to the web panel |
 | plain HTTP for this server | small `200` page (no request loops) |
-| plain HTTP for another host | forwarded, header lines passed through verbatim |
+| plain HTTP for another host | static `200 OK` page, never forwarded |
 
-Targets that resolve to private, loopback or link-local addresses are refused for `CONNECT` and HTTP
-forwarding (the only exception is this server's own Dropbear/SSH ports).
+The relay is not an open proxy: it never connects to third-party hosts. Every tunnel ends at Dropbear/sshd,
+so an SSH account (username + password) is required for any traffic. udpgw listens on `127.0.0.1:7300` only
+and is reached through the authenticated SSH tunnel.
 
 Robustness: every connection is torn down from both ends when either side ends, header reads time out,
 `LimitNOFILE=1048576`, and the relay re-opens its iptables ACCEPT rules at start and every minute (they
@@ -47,7 +48,7 @@ re-read live; only adding or removing a port restarts the relay.
 | fail2ban | Jails for sshd and Dropbear |
 | iptables | Rules are added, never flushed |
 | Certificates | Cloudflare Origin Certificate (15 years) or self-signed |
-| udpgw | Optional UDP forwarding via badvpn-udpgw |
+| udpgw | Optional UDP forwarding via badvpn-udpgw (loopback only, via the SSH tunnel) |
 | Squid | Optional authenticated proxy, see below |
 | Content filter | Optional DNS blocking of ads, malware, phishing and cryptominers, see below |
 | Web panel | Optional browser UI, see below |

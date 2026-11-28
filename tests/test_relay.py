@@ -218,13 +218,17 @@ def test_connect_own_host_goes_to_dropbear(env):
         assert BANNER in got
 
 
-def test_connect_and_forward_to_private_refused(env):
-    s = conn(env["http"])
-    s.sendall(b"CONNECT 10.0.0.5:22 HTTP/1.1\r\n\r\n")
-    assert recv_until(s, b"\r\n\r\n").startswith(b"HTTP/1.1 403")
-    s = conn(env["http"])
-    s.sendall(b"GET / HTTP/1.1\r\nHost: 169.254.169.254\r\n\r\n")
-    assert recv_until(s, b"\r\n\r\n").startswith(b"HTTP/1.1 403")
+def test_no_open_proxy(env):
+    # CONNECT anywhere but this server is refused, public or private
+    for target in ("10.0.0.5:22", "169.254.169.254:80", "93.184.216.34:443", "example.com:443"):
+        s = conn(env["http"])
+        s.sendall(f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n".encode())
+        assert recv_until(s, b"\r\n\r\n").startswith(b"HTTP/1.1 403"), target
+    # plain HTTP for another host is never forwarded: static page, no outbound connection
+    for host in ("169.254.169.254", "93.184.216.34", "example.com"):
+        s = conn(env["http"])
+        s.sendall(f"GET http://{host}/ HTTP/1.1\r\nHost: {host}\r\n\r\n".encode())
+        assert recv_until(s, b"OK\n").startswith(b"HTTP/1.1 200")
 
 
 def test_own_host_gets_a_page_not_a_loop(env):

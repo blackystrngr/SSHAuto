@@ -8,11 +8,15 @@ It binds every relay port itself and works out, per connection, what the client 
     HTTP + "Upgrade: websocket" .... WebSocket      -> 101, then Dropbear. Raw-after-101 (NetMod, HTTP
                                                        Custom, ...) and real RFC 6455 framing are both
                                                        detected and served.
-    HTTP "CONNECT host:port" ....... proxy tunnel   -> host:port (own address -> Dropbear)
+    HTTP "CONNECT host:port" ....... SSH tunnel     -> only this server's own address (-> Dropbear/sshd);
+                                                       any other target is refused (no open proxy)
     HTTP, path under panel secret .. web panel      -> reverse-proxied to the loopback panel server
     HTTP for this server ........... small 200 page (no request loops)
-    HTTP for another host .......... plain forward, headers passed through verbatim
+    HTTP for another host .......... same small 200 page (nothing is ever forwarded outward)
     silent client .................. raw SSH (server-first clients)
+
+Every path that reaches a shell ends at Dropbear/sshd, so SSH account authentication is mandatory.
+The relay never opens a connection to a third-party host.
 
 Every port accepts both TLS and plain, so "TLS on port 80" and "plain on 443" just work. Duplicate
 headers (two Host: lines) are accepted: the first one wins and every line is forwarded unchanged.
@@ -65,7 +69,6 @@ MAX_HEADER_LINES = 100
 MAX_HEAD_BYTES = 65536
 MAX_FRAME = 4 * 1024 * 1024
 WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-HOP_HEADER = "x-sshauto-hop"
 FIREWALL_RECHECK = 60.0
 
 CLOUDFLARE_NETS = [ipaddress.ip_network(n) for n in (
@@ -227,20 +230,6 @@ def split_hostport(value: str, default_port: int) -> tuple[str, int]:
         return host, int(port) if port else default_port
     except ValueError:
         return host, default_port
-
-
-def public_ip(ip: ipaddress._BaseAddress) -> bool:
-    return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast
-                or ip.is_reserved or ip.is_unspecified)
-
-
-async def resolve(host: str, port: int, timeout: float = 6.0) -> list:
-    try:
-        return [ipaddress.ip_address(host)]
-    except ValueError:
-        pass
-    infos = await asyncio.wait_for(asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM), timeout)
-    return [ipaddress.ip_address(i[4][0]) for i in infos]
 
 
 def _local_address(ip) -> bool:
@@ -584,11 +573,8 @@ class Relay:
         if not host_value:
             c.reply("400 Bad Request")
             return
-        host, port = split_hostport(host_value, 80)
-        if await self.is_own(host):
-            c.reply("200 OK", b"OK\n", head=(method == "HEAD"))
-            return
-        await self.forward(c, first, raw, headers, host, port)
+        # Own host or not, the answer is the same static page: this relay is not an HTTP proxy.
+        c.reply("200 OK", b"OK\n", head=(method == "HEAD"))
 
     # ---- own-address detection -------------------------------------------------------------
     async def is_own(self, host: str) -> bool:
@@ -680,28 +666,20 @@ class Relay:
         if not (0 < port < 65536) or not host:
             c.reply("400 Bad Request")
             return
-        if await self.is_own(host):
-            http_ports, https_ports = self.cfg.ports()
-            relay_ports = {*http_ports, *https_ports, *DEFAULT_HTTP_PORTS, *DEFAULT_HTTPS_PORTS, DEFAULT_PROXY_PORT}
-            if port in (self.cfg.ssh_port, 22):
-                dest = ("127.0.0.1", port)
-            elif port in relay_ports or port == self.cfg.dropbear_port:
-                dest = ("127.0.0.1", self.cfg.dropbear_port)
-            else:
-                c.reply("403 Forbidden")
-                return
-            attempts = 3
+        if not await self.is_own(host):
+            log.warning("refused CONNECT to %s:%s from %s (not this server)", host, port, c.peer)
+            c.reply("403 Forbidden")
+            return
+        http_ports, https_ports = self.cfg.ports()
+        relay_ports = {*http_ports, *https_ports, *DEFAULT_HTTP_PORTS, *DEFAULT_HTTPS_PORTS, DEFAULT_PROXY_PORT}
+        if port in (self.cfg.ssh_port, 22):
+            dest = ("127.0.0.1", port)
+        elif port in relay_ports or port == self.cfg.dropbear_port:
+            dest = ("127.0.0.1", self.cfg.dropbear_port)
         else:
-            try:
-                ips = await resolve(host, port)
-            except (OSError, asyncio.TimeoutError):
-                c.reply("502 Bad Gateway")
-                return
-            if not ips or not all(public_ip(i) for i in ips):
-                log.warning("refused CONNECT to non-public %s:%s from %s", host, port, c.peer)
-                c.reply("403 Forbidden")
-                return
-            dest, attempts = (host, port), 1
+            c.reply("403 Forbidden")
+            return
+        attempts = 3
         try:
             r, w = await self.open_backend(dest[0], dest[1], attempts=attempts)
         except (OSError, asyncio.TimeoutError) as exc:
@@ -711,32 +689,6 @@ class Relay:
         c.writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         await c.writer.drain()
         await tunnel(c.reader, c.writer, r, w)
-
-    # ---- plain HTTP forward ----------------------------------------------------------------
-    async def forward(self, c: Conn, first: bytes, raw, headers, host: str, port: int) -> None:
-        if HOP_HEADER in headers:
-            c.reply("508 Loop Detected")
-            return
-        try:
-            ips = await resolve(host, port)
-        except (OSError, asyncio.TimeoutError):
-            c.reply("502 Bad Gateway")
-            return
-        if not ips or not all(public_ip(i) for i in ips):
-            log.warning("refused forward to non-public %s:%s from %s", host, port, c.peer)
-            c.reply("403 Forbidden")
-            return
-        try:
-            r, w = await self.open_backend(host, port)
-        except (OSError, asyncio.TimeoutError) as exc:
-            log.error("forward to %s:%s failed: %r", host, port, exc)
-            c.reply("502 Bad Gateway")
-            return
-        w.write(first)
-        for line in raw:                      # verbatim, duplicates included
-            w.write(line)
-        w.write(f"{HOP_HEADER}: 1\r\n\r\n".encode())
-        await http_relay(c.reader, c.writer, r, w)
 
     # ---- web panel (reverse proxy to the loopback panel server) ------------------------------
     async def panel(self, c: Conn, first: bytes, raw, headers: dict, port: int) -> None:
