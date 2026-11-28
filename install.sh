@@ -3,11 +3,11 @@
 #
 #   bash <(curl -LS https://raw.githubusercontent.com/blackystrngr/SSHAuto/main/install.sh)
 #
-# Squid and the web panel are on by default; the DNS filter is OFF (opt in). Override with environment variables:
+# The web panel is on by default; Squid and the DNS filter are OFF (opt in). Override with environment variables:
 #   SSHAUTO_DOMAIN       domain for the tunnel (skips the prompt)       e.g. hi.blackstrngr.qzz.io
 #   SSHAUTO_CF_EMAIL     Cloudflare account email   } both set -> Cloudflare Origin cert,
 #   SSHAUTO_CF_KEY       Cloudflare Global API key  } otherwise a self-signed cert
-#   SSHAUTO_SQUID=0      skip the Squid proxy        (SSHAUTO_SQUID_USER / _PASS / _PORT to customise)
+#   SSHAUTO_SQUID=1      ALSO install the Squid proxy (off by default; SSHAUTO_SQUID_USER / _PASS / _PORT to customise)
 #   SSHAUTO_FILTER=1     ALSO install the ad/malware/phishing/miner DNS filter (off by default)
 #   SSHAUTO_PANEL=0      skip the web panel          (SSHAUTO_PANEL_USER / _PASS to customise)
 #   SSHAUTO_REPO_URL, SSHAUTO_BRANCH
@@ -17,7 +17,7 @@ REPO_URL="${SSHAUTO_REPO_URL:-https://github.com/blackystrngr/SSHAuto.git}"
 BRANCH="${SSHAUTO_BRANCH:-main}"
 APP_ROOT="/opt/sshauto"
 
-SQUID="${SSHAUTO_SQUID:-1}"
+SQUID="${SSHAUTO_SQUID:-0}"
 FILTER="${SSHAUTO_FILTER:-0}"
 PANEL="${SSHAUTO_PANEL:-1}"
 
@@ -64,7 +64,7 @@ if [[ -z "${SSHAUTO_DOMAIN:-}" && ! -t 0 && ! -r /dev/tty ]]; then
 fi
 
 args=(install --force)
-[[ "$SQUID" != "0" ]]  && args+=(--squid)
+[[ "$SQUID" == "1" ]]  && args+=(--squid)
 [[ -n "${SSHAUTO_SQUID_USER:-}" ]] && args+=(--squid-user "$SSHAUTO_SQUID_USER")
 [[ -n "${SSHAUTO_SQUID_PASS:-}" ]] && args+=(--squid-pass "$SSHAUTO_SQUID_PASS")
 [[ -n "${SSHAUTO_SQUID_PORT:-}" ]] && args+=(--squid-port "$SSHAUTO_SQUID_PORT")

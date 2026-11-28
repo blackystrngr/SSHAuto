@@ -36,3 +36,12 @@ def test_password_entries_prefers_crypt_and_keeps_sha_fallback(monkeypatch):
         ok=True, stdout="$apr1$salt$hash\n", stderr=""))
     got = sp._password_entries("u", "p")
     assert got[0].startswith("u:$apr1$") and got[-1].startswith("u:{SHA}")
+
+
+def test_squid_is_not_installed_by_default():
+    import pathlib
+    from core.plugin_manager import PluginManager
+    from features.squid_proxy import SquidProxyFeature
+    sh = (pathlib.Path(__file__).resolve().parent.parent / "install.sh").read_text()
+    assert 'SQUID="${SSHAUTO_SQUID:-0}"' in sh and '"$SQUID" == "1" ]]  && args+=(--squid)' in sh
+    assert SquidProxyFeature.optional and "squid_proxy" not in PluginManager().default_names()
