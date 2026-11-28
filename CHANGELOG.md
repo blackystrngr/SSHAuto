@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Changed
+- **DNS filter is fully opt-in.** `install.sh` no longer passes `--filter` by default (set `SSHAUTO_FILTER=1` to include it); `main.py install` already needed `--filter`. Nothing of the filter (dnsmasq-base, lists, units, drop-ins) is touched unless you ask for it.
+- DNS filter hardening: the filtered resolver is still only bind-mounted into `dropbear-tunnel` and `ws-ssh-proxy` (system `/etc/resolv.conf`, systemd-resolved and netplan are never touched). Its resolv.conf now lists the host's own nameservers after the filter as a fail-open fallback (`timeout:1 attempts:2`), and dnsmasq's upstream is pinned to the system `/etc/resolv.conf`.
 - **Firewall is optional and plain iptables again (no ufw).** Turn it on from the web panel, `main.py firewall` or `install --firewall`. It only adds `ACCEPT` rules for SSH, DNS 53 and the relay/Squid/custom ports at the top of `INPUT` (in front of Oracle's catch-all `REJECT`, which is left in place) and saves them with `netfilter-persistent`. No flush, no default-policy change, no rule is deleted; ufw is not used and `core/ufw.py` is gone. fail2ban uses the `iptables-multiport` ban action. Optional: `SSHAUTO_TUNE_CONNTRACK=1`.
 - The web panel is always installed last (`priority` on features).
 - Uninstall (and port/Squid removal) never delete firewall rules; certificates and udpgw are kept on uninstall; fail2ban is no longer restarted/purged on uninstall.

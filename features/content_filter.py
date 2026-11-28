@@ -37,8 +37,28 @@ no-hosts
 cache-size=10000
 pid-file=/run/{DNSFILTER_UNIT}.pid
 # upstream resolvers: the system default (/etc/resolv.conf is read, never modified)
+resolv-file=/etc/resolv.conf
 conf-dir={LISTS_DIR},*.conf
 """
+
+
+HOST_RESOLV = Path("/etc/resolv.conf")
+
+
+def render_resolv_conf(host_text: str = "") -> str:
+    """resolv.conf seen ONLY by the tunnel services (bind-mounted, the system file is never written).
+    The filter comes first; the host's own nameservers (read-only copy) follow as a fail-open fallback, so if the
+    filter ever stops the tunnel keeps resolving instead of losing DNS. A blocked name is an NXDOMAIN answer from the
+    filter, which glibc does not retry on the fallback."""
+    fallback = []
+    for line in host_text.splitlines():
+        parts = line.split("#", 1)[0].split()
+        if len(parts) >= 2 and parts[0] == "nameserver" and parts[1] != FILTER_ADDR and parts[1] not in fallback:
+            fallback.append(parts[1])
+    lines = ["# managed by sshauto", f"nameserver {FILTER_ADDR}"]
+    lines += [f"nameserver {ns}" for ns in fallback[:2]]
+    lines.append("options timeout:1 attempts:2")
+    return "\n".join(lines) + "\n"
 
 
 def render_unit(dnsmasq_bin: str) -> str:
@@ -113,7 +133,11 @@ class ContentFilterFeature(BaseFeature):
             raise Exception("no blocklist could be downloaded (check outbound access to raw.githubusercontent.com)")
 
         _write_if_changed(DNSMASQ_CONF, render_dnsmasq_conf())
-        _write_if_changed(RESOLV_CONF, f"# managed by sshauto\nnameserver {FILTER_ADDR}\n")
+        try:
+            host_resolv = HOST_RESOLV.read_text()       # read-only: used just for the fallback nameservers
+        except OSError:
+            host_resolv = ""
+        _write_if_changed(RESOLV_CONF, render_resolv_conf(host_resolv))
         test = Shell.run(f"{dnsmasq} --test --conf-file={DNSMASQ_CONF}", check=False, timeout=60)
         if not test.ok:
             raise Exception(f"dnsmasq config invalid: {(test.stderr or test.stdout).strip()}")
