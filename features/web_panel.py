@@ -61,6 +61,7 @@ class WebPanelFeature(BaseFeature):
     description = "Web panel (optional): monitor and manage everything from a browser"
     depends_on = ["packages", "python_proxy"]
     optional = True
+    priority = 100   # always installed last
 
     def is_installed(self) -> bool:
         return UNIT_PATH.exists() and Shell.run(f"systemctl is-active {UNIT}", check=False, timeout=10).ok

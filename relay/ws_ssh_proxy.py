@@ -774,8 +774,8 @@ class Relay:
 
     @staticmethod
     def open_firewall(ports) -> None:
-        """Make sure every listening port is allowed by ufw (add-only, idempotent). Re-applied
-        periodically in case rules were changed after we started. Does nothing if ufw is
+        """Make sure every listening port is allowed by ufw (add-only, idempotent, ufw only: raw iptables
+        is never touched). Re-applied periodically in case rules were changed after we started. Does nothing if ufw is
         missing or inactive."""
         try:
             st = subprocess.run(["ufw", "status"], capture_output=True, text=True, timeout=15)

@@ -37,7 +37,7 @@ class PythonProxyFeature(BaseFeature):
     reverse proxy in front of it."""
     name = "python_proxy"
     description = "Relay: TLS + WebSocket + CONNECT + raw SSH on every relay port"
-    depends_on = ["packages", "dropbear_service", "certificates", "firewall"]
+    depends_on = ["packages", "dropbear_service", "certificates"]
 
     def is_installed(self) -> bool:
         return PROXY_BIN.exists() and Shell.run(f"systemctl is-active {SERVICE_NAME}", check=False).ok

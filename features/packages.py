@@ -11,6 +11,7 @@ class PackagesFeature(BaseFeature):
     name = "packages"
     description = "Install required packages, remove conflicting ones"
     depends_on = []
+    priority = 1
 
     def is_installed(self) -> bool:
         return all(self._dpkg_installed(p) for p in self._core_check_list())
@@ -32,7 +33,7 @@ class PackagesFeature(BaseFeature):
 
     def _core_check_list(self):
         return ["dropbear", "openssh-server", "fail2ban",
-                "certbot", "python3", "iptables", "ufw", "git"]
+                "certbot", "python3", "iptables", "git"]
 
     def _dpkg_installed(self, pkg):
         result = Shell.run(f"dpkg -s {pkg}", check=False)

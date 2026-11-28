@@ -23,7 +23,7 @@ PUBLIC_SSH_PORT_DEFAULT = 2222
 USER_GROUP = "sshauto-users"
 
 REQUIRED_PACKAGES = [
-    "dropbear", "fail2ban", "iptables", "ufw", "curl", "git",
+    "dropbear", "fail2ban", "iptables", "curl", "git",
     "certbot"
 ]
 REMOVE_PACKAGES = ["apache2", "firewalld"]

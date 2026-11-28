@@ -21,7 +21,7 @@ PLAN = """This will remove everything sshauto created:
   - services: ws-ssh-proxy, dropbear-tunnel, optional Squid, DNS content filter and web panel
   - fail2ban jail config, OpenSSH hardening + banner (SSH port is left as is)
   - state ({state}, except certificates), logs ({logs}), the 'kk' command{app_note}
-KEPT: all ufw/firewall rules (never reset or deleted), certificates ({certs}), udpgw (badvpn-udpgw)
+KEPT: all ufw/firewall rules (left untouched), certificates ({certs}), udpgw (badvpn-udpgw)
 {pkg_note}"""
 
 

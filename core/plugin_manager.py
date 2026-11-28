@@ -38,7 +38,7 @@ class PluginManager:
                 visit(dep)
             visiting.discard(n)
             resolved.append(n)
-        for n in wanted:
+        for n in sorted(wanted, key=lambda n: (self._classes[n].priority if n in self._classes else 50, n)):
             visit(n)
         return [self.get(n) for n in resolved]
     def install_all(self, only=None, force=False, include=()):

@@ -120,6 +120,8 @@ class PanelApi:
             ("GET", r"/squid", self.squid_get, True),
             ("POST", r"/squid", self.squid_set, True),
             ("DELETE", r"/squid", self.squid_remove, True),
+            ("GET", r"/firewall", self.firewall_get, True),
+            ("POST", r"/firewall", self.firewall_set, True),
             ("GET", r"/fail2ban", self.fail2ban_get, True),
             ("POST", r"/fail2ban", self.fail2ban_set, True),
             ("DELETE", r"/fail2ban", self.fail2ban_remove, True),
@@ -419,6 +421,18 @@ class PanelApi:
             from features.squid_proxy import SquidProxyFeature
             SquidProxyFeature().remove()
         return self._job("Remove Squid proxy", run)
+
+    # ---- firewall (optional, ufw) -------------------------------------------------------------
+    def firewall_get(self, req):
+        from features.firewall import FirewallFeature
+        return 200, {"installed": FirewallFeature().is_installed()}
+
+    def firewall_set(self, req):
+        def run():
+            from features.firewall import FirewallFeature
+            if not FirewallFeature().safe_install():
+                raise RuntimeError("firewall setup failed")
+        return self._job("Turn on firewall", run)
 
     # ---- fail2ban ---------------------------------------------------------------------------
     def fail2ban_get(self, req):

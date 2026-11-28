@@ -3,8 +3,9 @@
 ## Unreleased
 
 ### Changed
-- **Firewall is now ufw instead of raw iptables.** Install allows SSH, enables ufw, then allows the relay/Squid/custom ports; relay, doctor, dashboard and Squid use ufw; fail2ban uses the ufw ban action; ufw is no longer purged as a conflicting package. Rules are never reset or deleted.
-- Uninstall (and port/Squid removal) never flush or delete iptables rules; certificates and udpgw are kept on uninstall; fail2ban is no longer restarted/purged on uninstall.
+- **Firewall is optional and ufw only.** It is not installed by default: turn it on from the web panel (Protection page), `main.py firewall` or `install --firewall`. It allows SSH, enables ufw, then opens DNS 53 and the relay/Squid/custom ports; relay, doctor, dashboard and Squid use ufw; fail2ban uses the ufw ban action; ufw is no longer purged as a conflicting package. No iptables flush or inserted rules. Learned from a stock Oracle Ubuntu 24.04 image: its catch-all `INPUT REJECT` (reloaded at boot by netfilter-persistent) sits in front of ufw's chains and blocks every ufw-opened port, so the installer deletes that one rule and purges netfilter-persistent when it detects this (opt out: `SSHAUTO_KEEP_OCI_REJECT=1`). Nothing outside Ubuntu's defaults is changed (IPv6 and DNS untouched). Optional: `SSHAUTO_TUNE_CONNTRACK=1` raises the conntrack limit (default 7680 can fill up and drop new connections).
+- The web panel is always installed last (`priority` on features).
+- Uninstall (and port/Squid removal) never delete firewall rules; certificates and udpgw are kept on uninstall; fail2ban is no longer restarted/purged on uninstall.
 - **fail2ban is now optional and off by default**, like Squid, the content filter and the web panel. Turn it on/off with `main.py fail2ban [--remove]`, `main.py install --fail2ban`, or the Protection page in the web panel (`GET/POST/DELETE /fail2ban`). The `fail2ban` apt package is still installed as a base dependency, but no jail is configured or started until you turn it on.
 
 ### Security

@@ -38,7 +38,7 @@ so an SSH account (username + password) is required for any traffic. udpgw liste
 and is reached through the authenticated SSH tunnel.
 
 Robustness: every connection is torn down from both ends when either side ends, header reads time out,
-`LimitNOFILE=1048576`, and the relay re-allows its ports in ufw at start and every minute if any are missing (it never deletes rules). Certificate, panel and Dropbear settings are
+`LimitNOFILE=1048576`, and the relay re-allows its ports in ufw at start and every minute if any are missing. Certificate, panel and Dropbear settings are
 re-read live; only adding or removing a port restarts the relay.
 
 | Component | Role |
@@ -47,7 +47,7 @@ re-read live; only adding or removing a port restarts the relay.
 | Dropbear | Tunnel SSH backend, loopback only (systemd: `dropbear-tunnel`) |
 | OpenSSH | Direct admin access on its own port, with a random banner |
 | fail2ban | Optional jails for sshd and Dropbear, see below |
-| Firewall | ufw: SSH is allowed first, then ufw is enabled; rules are only added, never reset or deleted (not even on uninstall) |
+| Firewall | Optional, off by default (turn on from the web panel, `main.py firewall` or `install --firewall`). ufw. Managed through ufw (no iptables flush or inserts). On Oracle images the installer removes the one catch-all `INPUT REJECT` rule and purges netfilter-persistent, because that rule sits in front of ufw's chains and would keep every ufw-opened port blocked (opt out: `SSHAUTO_KEEP_OCI_REJECT=1`; all other Oracle rules are kept). The install sets no sysctl/IPv6/DNS options (Ubuntu defaults are kept); it only sets ufw to allow all outgoing / deny incoming and allows SSH, DNS (53 tcp/udp) and the relay ports and enables ufw. Rules are only added; uninstall leaves them untouched. |
 | Certificates | Cloudflare Origin Certificate (15 years) or self-signed |
 | udpgw | Optional UDP forwarding via badvpn-udpgw (loopback only, via the SSH tunnel) |
 | Squid | Optional authenticated proxy, see below |
@@ -81,6 +81,8 @@ sudo python3 main.py install --panel     # also install the optional web panel
 sudo python3 main.py panel               # install/manage the web panel (--status, --reset-password, --remove)
 sudo python3 main.py install --fail2ban  # also set up the optional fail2ban jails
 sudo python3 main.py fail2ban            # turn fail2ban jails on (--remove: turn off)
+sudo python3 main.py install --firewall  # also set up the optional ufw firewall
+sudo python3 main.py firewall            # turn the ufw firewall on (also a button in the web panel)
 sudo python3 main.py doctor              # verify tunnel end-to-end and auto-repair (--no-heal: check only)
 sudo python3 main.py status              # per-feature install status
 sudo python3 main.py cert                # re-run the certificate menu

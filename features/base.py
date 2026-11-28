@@ -19,6 +19,7 @@ class BaseFeature(ABC):
     depends_on: list[str] = []
     idempotent: bool = True
     optional: bool = False   # only installed when asked for
+    priority: int = 50       # install order tie-break: low first, high last
 
     @abstractmethod
     def is_installed(self) -> bool: ...

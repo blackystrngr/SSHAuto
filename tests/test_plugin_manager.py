@@ -19,7 +19,7 @@ def test_explicit_squid_pulls_dependencies():
     m = PluginManager()
     order = [f.name for f in m._ordered(["squid_proxy"])]
     assert order[-1] == "squid_proxy"
-    assert {"packages", "firewall"} <= set(order)
+    assert "packages" in set(order)
 
 
 def test_dependents_skipped_and_failures_retried(monkeypatch):
@@ -48,3 +48,9 @@ def test_dependents_skipped_and_failures_retried(monkeypatch):
     results = m.install_all()
     assert results == {"a": False, "b": False}
     assert calls == {"a": 2, "b": 0}   # a retried once, b never attempted
+
+
+def test_firewall_first_and_panel_last():
+    order = [f.name for f in PluginManager()._ordered(["web_panel", "firewall", "squid_proxy", "fail2ban_service", "udpgw_service"])]
+    assert order[0] == "firewall"
+    assert order[-1] == "web_panel"

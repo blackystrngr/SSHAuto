@@ -79,6 +79,8 @@ def cmd_install(args):
         include.append("squid_proxy")
     if args.fail2ban:
         include.append("fail2ban_service")
+    if args.firewall:
+        include.append("firewall")
     if not data.get("created_at"):
         data["created_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         state.save(data)
@@ -125,6 +127,11 @@ def cmd_fail2ban(args):
         feature.remove()
         return
     if not feature.safe_install():
+        sys.exit(1)
+
+def cmd_firewall(args):
+    require_root()
+    if not PluginManager().get("firewall").safe_install():
         sys.exit(1)
 
 def cmd_doctor(args):
@@ -268,6 +275,8 @@ def build_parser():
     _add_panel_opts(p)
     p.add_argument("--fail2ban", action="store_true",
                    help="also set up the optional fail2ban jails (off by default)")
+    p.add_argument("--firewall", action="store_true",
+                   help="also set up the optional ufw firewall (off by default)")
     p.set_defaults(func=cmd_install)
     p = sub.add_parser("squid", help="install/reconfigure the optional Squid proxy")
     p.add_argument("--remove", action="store_true", help="disable Squid")
@@ -285,6 +294,9 @@ def build_parser():
     p.add_argument("--update", action="store_true", help="re-download the blocklists")
     p.add_argument("--remove", action="store_true", help="remove the filter")
     p.set_defaults(func=cmd_filter)
+    p = sub.add_parser("firewall", help="optional ufw firewall: SSH, DNS and the relay ports (off by default)")
+    p.set_defaults(func=cmd_firewall)
+
     p = sub.add_parser("fail2ban", help="optional fail2ban jails for ssh and dropbear (off by default)")
     p.add_argument("--remove", action="store_true", help="disable fail2ban jails")
     p.set_defaults(func=cmd_fail2ban)

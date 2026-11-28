@@ -74,13 +74,13 @@ def _fw_rule(action: str, port: int) -> None:
     if action != "add":
         return
     from core import ufw
-    ufw.ensure_ports([port])
+    ufw.ensure_ports([port], only_if_active=True)
 
 
 class SquidProxyFeature(BaseFeature):
     name = "squid_proxy"
     description = "Squid proxy (optional) – username/password required"
-    depends_on = ["packages", "firewall"]
+    depends_on = ["packages"]
     optional = True
 
     def is_installed(self) -> bool:
