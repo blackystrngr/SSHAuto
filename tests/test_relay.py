@@ -349,3 +349,23 @@ def test_no_nginx_feature_left():
     from core.plugin_manager import PluginManager
     names = {f.name for f in PluginManager()._ordered()}
     assert "nginx_relay" not in names and {"python_proxy", "certificates", "firewall"} <= names
+
+
+def test_tunnel_audit_line_has_client_and_backend_port(env, caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger="relay.tunnel")
+    s = conn(env["http"])
+    s.sendall(b"GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n\r\n")
+    assert recv_until(s, b"\r\n\r\n").startswith(b"HTTP/1.1 101")
+    recv_until(s, BANNER)
+    s.close()
+    time.sleep(0.5)
+    lines = [r.getMessage() for r in caplog.records if r.name == "relay.tunnel"]
+    assert any(l.startswith("open kind=ws client=127.0.0.1 ") and "backend_port=" in l for l in lines), lines
+    assert any(l.startswith("close kind=ws") and "seconds=" in l for l in lines), lines
+
+
+def test_client_ip_trusts_cf_header_only_from_cloudflare():
+    assert relay.client_ip("127.0.0.1", {"cf-connecting-ip": "9.9.9.9"}) == "127.0.0.1"
+    assert relay.client_ip("173.245.48.5", {"cf-connecting-ip": "9.9.9.9"}) == "9.9.9.9"
+    assert relay.client_ip("173.245.48.5", {"cf-connecting-ip": "junk"}) == "173.245.48.5"

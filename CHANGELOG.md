@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Security
+- Every tunnel is logged (`relay.tunnel`, always on): real client IP (CF-Connecting-IP behind Cloudflare), relay port and the Dropbear backend port. Dropbear logs logins as `127.0.0.1:<backend_port>`, so `python3 tools/sessions.py` shows which real IP used which SSH account.
 - Relay is no longer an open proxy: `CONNECT` is accepted only for this server's own address (-> Dropbear/sshd), and plain HTTP for other hosts gets a static 200 page instead of being forwarded. Every tunnel now requires an SSH account.
 - udpgw binds `127.0.0.1:7300` instead of `0.0.0.0:7300` (it has no authentication); clients reach it through the SSH tunnel. Existing units bound to 0.0.0.0 are rewritten on the next install run.
 

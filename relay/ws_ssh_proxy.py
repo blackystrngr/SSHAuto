@@ -79,6 +79,7 @@ CLOUDFLARE_NETS = [ipaddress.ip_network(n) for n in (
     "2a06:98c0::/29", "2c0f:f248::/32")]
 
 log = logging.getLogger("relay")
+tlog = logging.getLogger("relay.tunnel")      # one open/close line per tunnel: real client IP <-> Dropbear backend port
 
 
 # ------------------------------------------------------------------------------- configuration
@@ -215,6 +216,16 @@ def is_cloudflare(ip: str) -> bool:
     except ValueError:
         return False
     return any(a in n for n in CLOUDFLARE_NETS if n.version == a.version)
+
+
+def client_ip(peer: str, headers: dict | None = None) -> str:
+    """Real client address: behind Cloudflare use CF-Connecting-IP, otherwise the socket peer."""
+    if headers and is_cloudflare(peer):
+        try:
+            return str(ipaddress.ip_address(headers.get("cf-connecting-ip", "")))
+        except ValueError:
+            pass
+    return peer
 
 
 def split_hostport(value: str, default_port: int) -> tuple[str, int]:
@@ -611,6 +622,20 @@ class Relay:
     async def dropbear(self):
         return await self.open_backend("127.0.0.1", self.cfg.dropbear_port, attempts=3, timeout=3.0)
 
+    async def run_tunnel(self, c: Conn, kind: str, ip: str, r, w, **kw) -> None:
+        """tunnel() plus an audit trail. Dropbear logs 'from 127.0.0.1:<backend_port>' for every login,
+        so backend_port ties an SSH account in the Dropbear log to the real client IP logged here."""
+        sock = w.get_extra_info("sockname")
+        front = c.writer.get_extra_info("sockname")
+        fields = "kind=%s client=%s relay_port=%s backend_port=%s tls=%s" % (
+            kind, ip, front[1] if front else "?", sock[1] if sock else "?", int(c.tls))
+        t0 = time.monotonic()
+        tlog.info("open " + fields)
+        try:
+            await tunnel(c.reader, c.writer, r, w, **kw)
+        finally:
+            tlog.info("close %s seconds=%d", fields, time.monotonic() - t0)
+
     async def ssh_tunnel(self, c: Conn, initial: bytes) -> None:
         try:
             r, w = await self.dropbear()
@@ -619,7 +644,7 @@ class Relay:
             return
         if initial:
             w.write(initial)
-        await tunnel(c.reader, c.writer, r, w)
+        await self.run_tunnel(c, "ssh", c.peer, r, w)
 
     # ---- WebSocket -------------------------------------------------------------------------
     async def websocket(self, c: Conn, headers: dict) -> None:
@@ -629,6 +654,7 @@ class Relay:
             log.error("cannot reach Dropbear: %r", exc)
             c.reply("502 Bad Gateway")
             return
+        ip = client_ip(c.peer, headers)
         lines = ["HTTP/1.1 101 Switching Protocols", "Upgrade: websocket", "Connection: Upgrade"]
         key = headers.get("sec-websocket-key")
         if key:
@@ -652,13 +678,13 @@ class Relay:
             return
         if first and looks_framed(first):
             parser = FrameParser()
-            await tunnel(c.reader, c.writer, r, w,
-                         pump_ab=lambda src, dst: ws_from_client(src, dst, c.writer, parser, first),
-                         pump_ba=lambda src, dst: ws_to_client(src, dst))
+            await self.run_tunnel(c, "ws", ip, r, w,
+                                  pump_ab=lambda src, dst: ws_from_client(src, dst, c.writer, parser, first),
+                                  pump_ba=lambda src, dst: ws_to_client(src, dst))
             return
         if first:
             w.write(first)
-        await tunnel(c.reader, c.writer, r, w)
+        await self.run_tunnel(c, "ws", ip, r, w)
 
     # ---- CONNECT ---------------------------------------------------------------------------
     async def connect(self, c: Conn, target: str) -> None:
@@ -688,7 +714,7 @@ class Relay:
             return
         c.writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         await c.writer.drain()
-        await tunnel(c.reader, c.writer, r, w)
+        await self.run_tunnel(c, "connect", c.peer, r, w)
 
     # ---- web panel (reverse proxy to the loopback panel server) ------------------------------
     async def panel(self, c: Conn, first: bytes, raw, headers: dict, port: int) -> None:
@@ -803,6 +829,7 @@ def setup_logging() -> None:
     handlers.append(logging.StreamHandler(sys.stderr))
     logging.basicConfig(level=getattr(logging, os.environ.get("SSHAUTO_RELAY_LEVEL", "WARNING").upper(), logging.WARNING),
                         format="%(asctime)s %(levelname)s %(message)s", handlers=handlers, force=True)
+    tlog.setLevel(logging.INFO)
 
 
 def main() -> None:
