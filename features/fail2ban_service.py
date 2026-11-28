@@ -14,8 +14,9 @@ ignoreregex =
 
 class Fail2banServiceFeature(BaseFeature):
     name = "fail2ban_service"
-    description = "Set up fail2ban jails for ssh and dropbear"
+    description = "fail2ban jails for ssh and dropbear (optional, off by default)"
     depends_on = ["packages", "ssh_service", "dropbear_service"]
+    optional = True
 
     def is_installed(self) -> bool:
         return FAIL2BAN_JAIL_LOCAL.exists() and "[sshauto-dropbear]" in FAIL2BAN_JAIL_LOCAL.read_text()

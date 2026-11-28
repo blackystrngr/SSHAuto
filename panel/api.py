@@ -120,6 +120,9 @@ class PanelApi:
             ("GET", r"/squid", self.squid_get, True),
             ("POST", r"/squid", self.squid_set, True),
             ("DELETE", r"/squid", self.squid_remove, True),
+            ("GET", r"/fail2ban", self.fail2ban_get, True),
+            ("POST", r"/fail2ban", self.fail2ban_set, True),
+            ("DELETE", r"/fail2ban", self.fail2ban_remove, True),
             ("GET", r"/doctor", self.doctor_get, True),
             ("POST", r"/doctor/repair", self.doctor_repair, True),
             ("POST", r"/speedtest", self.speedtest, True),
@@ -416,6 +419,27 @@ class PanelApi:
             from features.squid_proxy import SquidProxyFeature
             SquidProxyFeature().remove()
         return self._job("Remove Squid proxy", run)
+
+    # ---- fail2ban ---------------------------------------------------------------------------
+    def fail2ban_get(self, req):
+        from features.fail2ban_service import Fail2banServiceFeature
+        return 200, {"installed": Fail2banServiceFeature().is_installed()}
+
+    def fail2ban_set(self, req):
+        def run():
+            from features.fail2ban_service import Fail2banServiceFeature
+            if not Fail2banServiceFeature().safe_install():
+                raise RuntimeError("fail2ban setup failed")
+        self._invalidate("services")
+        return self._job("Turn on brute-force protection", run)
+
+    def fail2ban_remove(self, req):
+        def run():
+            from features.fail2ban_service import Fail2banServiceFeature
+            Fail2banServiceFeature().remove()
+            Shell.run(["systemctl", "disable", "--now", "fail2ban"], check=False, timeout=15)
+        self._invalidate("services")
+        return self._job("Turn off brute-force protection", run)
 
     # ---- doctor / jobs / tools ------------------------------------------------------------
     def doctor_get(self, req):

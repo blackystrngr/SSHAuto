@@ -3,8 +3,10 @@
 [![CI](https://github.com/blackystrngr/SSHAuto/actions/workflows/ci.yml/badge.svg)](https://github.com/blackystrngr/SSHAuto/actions/workflows/ci.yml)
 
 SSH-over-WebSocket relay autoscript for Debian/Ubuntu VPS. One command installs and
-wires together a Python WebSocket proxy, Dropbear, OpenSSH, fail2ban, iptables
+wires together a Python WebSocket proxy, Dropbear, OpenSSH, iptables
 rules and TLS certificates, then gives you a `kk` dashboard to manage users and ports.
+fail2ban brute-force protection is available too, off by default — turn it on from the
+web panel or with `main.py fail2ban`.
 
 > **Use responsibly.** Run this only on infrastructure you own, in line with your
 > upstream providers' terms of service and local law.
@@ -45,7 +47,7 @@ re-read live; only adding or removing a port restarts the relay.
 | Relay | uvloop; public TLS + plain listener on every relay port, all protocols above (systemd: `ws-ssh-proxy`) |
 | Dropbear | Tunnel SSH backend, loopback only (systemd: `dropbear-tunnel`) |
 | OpenSSH | Direct admin access on its own port, with a random banner |
-| fail2ban | Jails for sshd and Dropbear |
+| fail2ban | Optional jails for sshd and Dropbear, see below |
 | iptables | Rules are added, never flushed |
 | Certificates | Cloudflare Origin Certificate (15 years) or self-signed |
 | udpgw | Optional UDP forwarding via badvpn-udpgw (loopback only, via the SSH tunnel) |
@@ -78,6 +80,8 @@ sudo python3 main.py install --squid     # also install the optional Squid proxy
 sudo python3 main.py squid               # install/reconfigure Squid on its own
 sudo python3 main.py install --panel     # also install the optional web panel
 sudo python3 main.py panel               # install/manage the web panel (--status, --reset-password, --remove)
+sudo python3 main.py install --fail2ban  # also set up the optional fail2ban jails
+sudo python3 main.py fail2ban            # turn fail2ban jails on (--remove: turn off)
 sudo python3 main.py doctor              # verify tunnel end-to-end and auto-repair (--no-heal: check only)
 sudo python3 main.py status              # per-feature install status
 sudo python3 main.py cert                # re-run the certificate menu
@@ -86,6 +90,21 @@ sudo python3 main.py uninstall --yes --keep-users --purge-packages   # flags: sk
 sudo python3 main.py dashboard           # same as `kk`
 python3 main.py --version
 ```
+
+## Optional fail2ban
+
+Not installed by default. Bans an IP after repeated failed sign-ins to SSH or the tunnel
+(Dropbear), for `bantime = 1h` after `maxretry` failures in `findtime = 10m`. Managed
+jails live in `/etc/fail2ban/jail.local`; turning it off removes that file (and with it
+the `sshd` jail too — the same file covers both) and restarts fail2ban back to its
+distro defaults.
+
+```bash
+sudo python3 main.py fail2ban            # turn on
+sudo python3 main.py fail2ban --remove   # turn off
+```
+
+Also toggleable from the web panel's Protection page.
 
 ## Optional Squid proxy
 

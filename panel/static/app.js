@@ -648,7 +648,25 @@ async function pageNetwork(main, c) {
 
 /* ---------------------------------------------------------------- protection */
 async function pageProtection(main, c) {
-  const body = h("div", {});
+  const body = h("div", {}), f2bBox = h("div", {});
+  async function loadFail2ban() {
+    const b = await GET("/fail2ban"); if (!c.alive) return;
+    clear(f2bBox).append(
+      h("div", { class: "row", style: { marginBottom: "10px" } },
+        h("span", { class: "chip " + (b.installed ? "good" : "") }, b.installed ? icon("check") : null, b.installed ? "On" : "Off"),
+        h("span", { class: "dim" }, "Bans an IP after repeated failed sign-ins to SSH or the tunnel.")),
+      h("div", { class: "row" }, h("button", {
+        class: "btn " + (b.installed ? "danger" : "primary"), onclick: async () => {
+          if (b.installed && !(await confirmBox({ title: "Turn off brute-force protection?", body: "Failed sign-ins will no longer get an IP banned.", action: "Turn off" }))) return;
+          try {
+            if (b.installed) await runJob(() => DEL("/fail2ban"), "Turn off brute-force protection");
+            else await runJob(() => POST("/fail2ban"), "Turn on brute-force protection");
+            toast(b.installed ? "Brute-force protection is off" : "Brute-force protection is on");
+          } catch (ex) { fail(ex); }
+          loadFail2ban();
+        }
+      }, b.installed ? "Turn off" : "Turn on")));
+  }
   async function load() {
     const f = await GET("/filter"); if (!c.alive) return;
     const sw = {};
@@ -688,8 +706,9 @@ async function pageProtection(main, c) {
           try { await runJob(() => DEL("/filter"), "Remove filter"); } catch (ex) { fail(ex); } load(); } }, "Remove"))));
   }
   add(main, [head("Protection", "Block ads, malware, phishing and cryptominers for everyone who uses the tunnel."), body,
-    h("p", { class: "notice", style: { marginTop: "26px" } }, "This works on domain names. An app that connects to a raw IP address, or uses its own encrypted DNS, is not filtered. Lists are updated when you press Update lists.")]);
-  await load();
+    h("p", { class: "notice", style: { marginTop: "26px" } }, "This works on domain names. An app that connects to a raw IP address, or uses its own encrypted DNS, is not filtered. Lists are updated when you press Update lists."),
+    block("Brute-force protection", "fail2ban, applied to SSH sign-ins and the tunnel.", f2bBox)]);
+  await Promise.all([load(), loadFail2ban()]);
 }
 
 /* ---------------------------------------------------------------- system */

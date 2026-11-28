@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed
+- **fail2ban is now optional and off by default**, like Squid, the content filter and the web panel. Turn it on/off with `main.py fail2ban [--remove]`, `main.py install --fail2ban`, or the Protection page in the web panel (`GET/POST/DELETE /fail2ban`). The `fail2ban` apt package is still installed as a base dependency, but no jail is configured or started until you turn it on.
+
 ### Security
 - Every tunnel is logged (`relay.tunnel`, always on): real client IP (CF-Connecting-IP behind Cloudflare), relay port and the Dropbear backend port. Dropbear logs logins as `127.0.0.1:<backend_port>`, so `python3 tools/sessions.py` shows which real IP used which SSH account.
 - Relay is no longer an open proxy: `CONNECT` is accepted only for this server's own address (-> Dropbear/sshd), and plain HTTP for other hosts gets a static 200 page instead of being forwarded. Every tunnel now requires an SSH account.

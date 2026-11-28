@@ -168,6 +168,56 @@ def test_reserved_port_refused(server):
     assert r.status == 400
 
 
+def wait_job(server, ck, job_id, timeout=5):
+    import time as _time
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        r, body = call(server, "GET", f"/sec/api/jobs/{job_id}", cookie=ck)
+        job = json.loads(body)
+        if job["status"] != "running":
+            return job
+        _time.sleep(0.05)
+    raise TimeoutError("job did not finish")
+
+
+def test_fail2ban_toggle(server, monkeypatch):
+    import panel.api as papi_mod
+
+    installed = {"v": False}
+
+    class FakeFail2ban:
+        def is_installed(self):
+            return installed["v"]
+
+        def safe_install(self):
+            installed["v"] = True
+            return True
+
+        def remove(self):
+            installed["v"] = False
+
+    import features.fail2ban_service as f2b_mod
+    monkeypatch.setattr(f2b_mod, "Fail2banServiceFeature", FakeFail2ban)
+    monkeypatch.setattr(papi_mod.Shell, "run", lambda *a, **k: type("R", (), {"ok": True})())
+
+    ck = login(server)
+    r, body = call(server, "GET", "/sec/api/fail2ban", cookie=ck)
+    assert r.status == 200 and json.loads(body)["installed"] is False
+
+    r, body = call(server, "POST", "/sec/api/fail2ban", {}, cookie=ck)
+    assert r.status == 202
+    job = wait_job(server, ck, json.loads(body)["job"])
+    assert job["status"] == "done"
+    r, body = call(server, "GET", "/sec/api/fail2ban", cookie=ck)
+    assert json.loads(body)["installed"] is True
+
+    r, body = call(server, "DELETE", "/sec/api/fail2ban", cookie=ck)
+    job = wait_job(server, ck, json.loads(body)["job"])
+    assert job["status"] == "done"
+    r, body = call(server, "GET", "/sec/api/fail2ban", cookie=ck)
+    assert json.loads(body)["installed"] is False
+
+
 # ---- metrics ------------------------------------------------------------------------------
 def test_parse_meminfo():
     used, total = metrics.parse_meminfo("MemTotal:  1000 kB\nMemAvailable:  250 kB\n")
