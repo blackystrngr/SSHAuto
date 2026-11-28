@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Changed
+- Uninstall (and port/Squid removal) never flush or delete iptables rules; certificates and udpgw are kept on uninstall; fail2ban is no longer restarted/purged on uninstall.
 - **fail2ban is now optional and off by default**, like Squid, the content filter and the web panel. Turn it on/off with `main.py fail2ban [--remove]`, `main.py install --fail2ban`, or the Protection page in the web panel (`GET/POST/DELETE /fail2ban`). The `fail2ban` apt package is still installed as a base dependency, but no jail is configured or started until you turn it on.
 
 ### Security

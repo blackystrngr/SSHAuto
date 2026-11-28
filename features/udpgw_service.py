@@ -69,9 +69,5 @@ WantedBy=multi-user.target
         log.important("Do NOT open port 7300 in any firewall. In your client set the UDPGW address to 127.0.0.1:7300.")
 
     def remove(self) -> None:
-        Shell.run("systemctl stop badvpn-udpgw", check=False, timeout=10)
-        Shell.run("systemctl disable badvpn-udpgw", check=False)
-        Path("/etc/systemd/system/badvpn-udpgw.service").unlink(missing_ok=True)
-        Path("/usr/local/bin/badvpn-udpgw").unlink(missing_ok=True)
-        Shell.run("systemctl daemon-reload", check=False, timeout=10)
-        log.success("UDP Gateway removed.")
+        # udpgw (binary, unit, service) is kept on uninstall.
+        log.info("UDP Gateway kept.")

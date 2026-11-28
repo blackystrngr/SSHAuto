@@ -156,9 +156,5 @@ class CertificatesFeature(BaseFeature):
         log.success("Certificate ready. The relay picks it up within seconds, no restart needed.")
 
     def remove(self):
-        data = state.load()
-        domain = data.get("cert_domain")
-        if domain and data.get("cert_strategy") == "cloudflare":
-            shutil.rmtree(LETSENCRYPT_LIVE / domain, ignore_errors=True)
-        shutil.rmtree(SSHAUTO_CERT_DIR, ignore_errors=True)
-        log.info("sshauto certificates removed.")
+        # Certificates are kept on uninstall.
+        log.info("Certificates kept.")

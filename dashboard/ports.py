@@ -48,10 +48,10 @@ class PortManager:
             raise ValidationError("port must be between 1 and 65535")
 
     def _apply_firewall(self, port, kind, action):
-        if action == "add":
+        # Add-only: iptables rules are never deleted.
+        if action == "add" and not Shell.run(
+                f"iptables -C INPUT -p tcp --dport {port} -j ACCEPT", check=False).ok:
             Shell.run(f"iptables -I INPUT -p tcp --dport {port} -j ACCEPT", check=False)
-        else:
-            Shell.run(f"iptables -D INPUT -p tcp --dport {port} -j ACCEPT", check=False)
 
     def _apply_relay(self):
         """The relay binds its ports at startup, so a port change needs a restart (open tunnels

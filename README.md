@@ -48,7 +48,7 @@ re-read live; only adding or removing a port restarts the relay.
 | Dropbear | Tunnel SSH backend, loopback only (systemd: `dropbear-tunnel`) |
 | OpenSSH | Direct admin access on its own port, with a random banner |
 | fail2ban | Optional jails for sshd and Dropbear, see below |
-| iptables | Rules are added, never flushed |
+| iptables | Rules are added, never flushed or deleted (not even on uninstall) |
 | Certificates | Cloudflare Origin Certificate (15 years) or self-signed |
 | udpgw | Optional UDP forwarding via badvpn-udpgw (loopback only, via the SSH tunnel) |
 | Squid | Optional authenticated proxy, see below |
@@ -85,8 +85,8 @@ sudo python3 main.py fail2ban            # turn fail2ban jails on (--remove: tur
 sudo python3 main.py doctor              # verify tunnel end-to-end and auto-repair (--no-heal: check only)
 sudo python3 main.py status              # per-feature install status
 sudo python3 main.py cert                # re-run the certificate menu
-sudo python3 main.py uninstall           # remove everything sshauto built (asks first)
-sudo python3 main.py uninstall --yes --keep-users --purge-packages   # flags: skip prompt / keep accounts / apt-purge dropbear, fail2ban, squid
+sudo python3 main.py uninstall           # remove sshauto (asks first; iptables rules, certificates and udpgw are kept)
+sudo python3 main.py uninstall --yes --keep-users --purge-packages   # flags: skip prompt / keep accounts / apt-purge dropbear, squid
 sudo python3 main.py dashboard           # same as `kk`
 python3 main.py --version
 ```

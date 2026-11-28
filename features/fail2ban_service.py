@@ -57,8 +57,8 @@ maxretry = 5
         if FAIL2BAN_JAIL_LOCAL.exists() and "Managed by sshauto" in FAIL2BAN_JAIL_LOCAL.read_text():
             FAIL2BAN_JAIL_LOCAL.unlink()
             (FAIL2BAN_FILTER_DIR / "sshauto-dropbear.conf").unlink(missing_ok=True)
-            Shell.run("systemctl restart fail2ban", check=False, timeout=30)
-            log.info("fail2ban jails removed.")
+            # No restart/reload: that would tear down fail2ban's iptables chains.
+            log.info("fail2ban jail config removed (running jails stay until fail2ban restarts).")
 
     def _detect_dropbear_log(self) -> str:
         for candidate in ("/var/log/auth.log", "/var/log/secure"):

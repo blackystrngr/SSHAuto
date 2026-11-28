@@ -12,15 +12,16 @@ from core.shell import Shell
 STATE_DIR = Path("/var/lib/sshauto")
 KK_LAUNCHER = Path("/usr/local/bin/kk")
 INSTALL_DIR = Path("/opt/sshauto")
-LEGACY_UNITS = ("ws-ssh-proxy", "sshauto-proxy", "dropbear-tunnel", "badvpn-udpgw", "sshauto-dnsfilter", "sshauto-panel")
-PURGE_PACKAGES = ["dropbear", "fail2ban", "squid"]
+CERT_DIR = Path("/var/lib/sshauto/certs")
+LEGACY_UNITS = ("ws-ssh-proxy", "sshauto-proxy", "dropbear-tunnel", "sshauto-dnsfilter", "sshauto-panel")
+PURGE_PACKAGES = ["dropbear", "squid"]   # fail2ban is kept: purging it drops its iptables chains
 
 PLAN = """This will remove everything sshauto created:
   - tunnel users (group '{group}') and their home directories{users_note}
-  - services: ws-ssh-proxy, dropbear-tunnel, badvpn-udpgw, optional Squid, DNS content filter and web panel
-  - fail2ban jails, OpenSSH hardening + banner (SSH port is left as is)
-  - certificates, state ({state}), logs ({logs}), the 'kk' command{app_note}
-  - custom relay port firewall rules (base ports stay open: other services may use them)
+  - services: ws-ssh-proxy, dropbear-tunnel, optional Squid, DNS content filter and web panel
+  - fail2ban jail config, OpenSSH hardening + banner (SSH port is left as is)
+  - state ({state}, except certificates), logs ({logs}), the 'kk' command{app_note}
+KEPT: all iptables rules (never flushed or deleted), certificates ({certs}), udpgw (badvpn-udpgw)
 {pkg_note}"""
 
 
@@ -43,11 +44,24 @@ def _remove_users() -> None:
     Shell.run(f"groupdel {USER_GROUP}", check=False)
 
 
+def _clear_state_keep_certs() -> None:
+    """Delete everything under STATE_DIR except the certificates directory."""
+    if not STATE_DIR.is_dir():
+        return
+    for item in STATE_DIR.iterdir():
+        if item.resolve() == CERT_DIR.resolve():
+            continue
+        if item.is_dir() and not item.is_symlink():
+            shutil.rmtree(item, ignore_errors=True)
+        else:
+            item.unlink(missing_ok=True)
+
+
 def run(*, yes: bool = False, purge_packages: bool = False, keep_users: bool = False) -> bool:
     """Tear everything down. Returns False if the user aborted."""
     app_removable = APP_ROOT.resolve() == INSTALL_DIR
     print(PLAN.format(
-        group=USER_GROUP, state=STATE_DIR, logs=LOG_DIR,
+        group=USER_GROUP, state=STATE_DIR, logs=LOG_DIR, certs=CERT_DIR,
         users_note=" (KEPT: --keep-users)" if keep_users else f" ({len(_tunnel_users())} found)",
         app_note=f", and {INSTALL_DIR}" if app_removable else "",
         pkg_note=("  - APT PACKAGES PURGED: " + ", ".join(PURGE_PACKAGES) +
@@ -77,10 +91,8 @@ def run(*, yes: bool = False, purge_packages: bool = False, keep_users: bool = F
         Path(f"/etc/systemd/system/{unit}.service").unlink(missing_ok=True)
     for old in ("sites-enabled", "sites-available"):          # left by versions that used nginx
         Path(f"/etc/nginx/{old}/sshauto-relay.conf").unlink(missing_ok=True)
-    for leftover in ("/usr/local/bin/ws_ssh_proxy.py", "/usr/local/bin/ws_proxy.py",
-                     "/usr/local/bin/badvpn-udpgw"):
+    for leftover in ("/usr/local/bin/ws_ssh_proxy.py", "/usr/local/bin/ws_proxy.py"):
         Path(leftover).unlink(missing_ok=True)
-    shutil.rmtree("/tmp/badvpn_src", ignore_errors=True)
     shutil.rmtree("/etc/sshauto", ignore_errors=True)
     for unit in ("dropbear-tunnel", "ws-ssh-proxy"):
         shutil.rmtree(f"/etc/systemd/system/{unit}.service.d", ignore_errors=True)
@@ -94,7 +106,7 @@ def run(*, yes: bool = False, purge_packages: bool = False, keep_users: bool = F
         Shell.run("apt-get autoremove -y", check=False, timeout=300)
 
     KK_LAUNCHER.unlink(missing_ok=True)
-    shutil.rmtree(STATE_DIR, ignore_errors=True)
+    _clear_state_keep_certs()
     shutil.rmtree(LOG_DIR, ignore_errors=True)
 
     log.rule("done")
