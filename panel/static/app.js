@@ -654,10 +654,10 @@ async function pageProtection(main, c) {
     clear(fwBox).append(
       h("div", { class: "row", style: { marginBottom: "10px" } },
         h("span", { class: "chip " + (b.installed ? "good" : "") }, b.installed ? icon("check") : null, b.installed ? "On" : "Off"),
-        h("span", { class: "dim" }, "ufw: allows SSH, DNS and the tunnel ports. Rules are never removed by the panel.")),
+        h("span", { class: "dim" }, "iptables: opens SSH, DNS and the tunnel ports. Rules are never removed by the panel.")),
       !b.installed && h("div", { class: "row" }, h("button", {
         class: "btn primary", onclick: async () => {
-          if (!(await confirmBox({ title: "Turn on the firewall?", body: "Installs ufw, allows SSH, DNS and the tunnel ports, then enables it. On Oracle images the catch-all INPUT reject rule is removed.", action: "Turn on" }))) return;
+          if (!(await confirmBox({ title: "Turn on the firewall?", body: "Adds iptables ACCEPT rules for SSH, DNS and the tunnel ports and saves them. Nothing else is changed.", action: "Turn on" }))) return;
           try { await runJob(() => POST("/firewall"), "Turn on firewall"); toast("Firewall is on"); } catch (ex) { fail(ex); }
           loadFirewall();
         }
@@ -722,7 +722,7 @@ async function pageProtection(main, c) {
   add(main, [head("Protection", "Block ads, malware, phishing and cryptominers for everyone who uses the tunnel."), body,
     h("p", { class: "notice", style: { marginTop: "26px" } }, "This works on domain names. An app that connects to a raw IP address, or uses its own encrypted DNS, is not filtered. Lists are updated when you press Update lists."),
     block("Brute-force protection", "fail2ban, applied to SSH sign-ins and the tunnel.", f2bBox),
-    block("Firewall", "Optional. ufw, off until you turn it on.", fwBox)]);
+    block("Firewall", "Optional. iptables port rules, off until you turn it on.", fwBox)]);
   await Promise.all([load(), loadFail2ban(), loadFirewall()]);
 }
 

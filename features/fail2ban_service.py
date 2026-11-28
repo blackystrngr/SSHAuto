@@ -32,7 +32,7 @@ class Fail2banServiceFeature(BaseFeature):
 bantime  = 1h
 findtime = 10m
 maxretry = 5
-banaction = ufw
+banaction = iptables-multiport
 
 [sshd]
 enabled  = true

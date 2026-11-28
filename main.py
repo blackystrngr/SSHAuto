@@ -276,7 +276,7 @@ def build_parser():
     p.add_argument("--fail2ban", action="store_true",
                    help="also set up the optional fail2ban jails (off by default)")
     p.add_argument("--firewall", action="store_true",
-                   help="also set up the optional ufw firewall (off by default)")
+                   help="also open the ports with iptables (off by default)")
     p.set_defaults(func=cmd_install)
     p = sub.add_parser("squid", help="install/reconfigure the optional Squid proxy")
     p.add_argument("--remove", action="store_true", help="disable Squid")
@@ -294,7 +294,7 @@ def build_parser():
     p.add_argument("--update", action="store_true", help="re-download the blocklists")
     p.add_argument("--remove", action="store_true", help="remove the filter")
     p.set_defaults(func=cmd_filter)
-    p = sub.add_parser("firewall", help="optional ufw firewall: SSH, DNS and the relay ports (off by default)")
+    p = sub.add_parser("firewall", help="optional iptables firewall: opens SSH, DNS and the relay ports (off by default)")
     p.set_defaults(func=cmd_firewall)
 
     p = sub.add_parser("fail2ban", help="optional fail2ban jails for ssh and dropbear (off by default)")

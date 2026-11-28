@@ -422,7 +422,7 @@ class PanelApi:
             SquidProxyFeature().remove()
         return self._job("Remove Squid proxy", run)
 
-    # ---- firewall (optional, ufw) -------------------------------------------------------------
+    # ---- firewall (optional, iptables) -------------------------------------------------------------
     def firewall_get(self, req):
         from features.firewall import FirewallFeature
         return 200, {"installed": FirewallFeature().is_installed()}

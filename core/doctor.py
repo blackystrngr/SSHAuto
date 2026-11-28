@@ -94,11 +94,11 @@ def _publicly_listening(port: int) -> bool:
 
 
 def _closed_ports(ports: list[int]) -> list[int]:
-    """Relay ports that ufw would not accept (none if ufw is inactive)."""
-    from core import ufw
-    if not ufw.is_active():
+    """Relay ports without an iptables ACCEPT rule (none if iptables is missing)."""
+    from core import iptables
+    if not iptables.available():
         return []
-    have = ufw.allowed_tcp_ports()
+    have = iptables.allowed_tcp_ports()
     return [p for p in ports if p not in have]
 
 

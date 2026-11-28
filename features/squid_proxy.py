@@ -70,11 +70,11 @@ def _password_entries(user: str, password: str) -> list[str]:
 
 
 def _fw_rule(action: str, port: int) -> None:
-    """Add-only: ufw rules are never deleted ('del' is a no-op)."""
+    """Add-only: iptables rules are never deleted ('del' is a no-op)."""
     if action != "add":
         return
-    from core import ufw
-    ufw.ensure_ports([port], only_if_active=True)
+    from core import iptables
+    iptables.ensure_ports([port])
 
 
 class SquidProxyFeature(BaseFeature):

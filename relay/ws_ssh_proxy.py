@@ -35,7 +35,7 @@ import json
 import logging
 import logging.handlers
 import os
-import re
+import shutil
 import socket
 import ssl
 import struct
@@ -774,28 +774,28 @@ class Relay:
 
     @staticmethod
     def open_firewall(ports) -> None:
-        """Make sure every listening port is allowed by ufw (add-only, idempotent, ufw only: raw iptables
-        is never touched). Re-applied periodically in case rules were changed after we started. Does nothing if ufw is
-        missing or inactive."""
-        try:
-            st = subprocess.run(["ufw", "status"], capture_output=True, text=True, timeout=15)
-        except (OSError, subprocess.SubprocessError):
-            return
-        if st.returncode != 0 or "Status: active" not in st.stdout:
-            return
-        have = set()
-        for line in st.stdout.splitlines():
-            m = re.match(r"^(\d+)(?:/(tcp|udp))?(?:\s+\(v6\))?\s+ALLOW\b", line.strip())
-            if m and m.group(2) in (None, "tcp"):
-                have.add(int(m.group(1)))
+        """Make sure every listening port has an iptables ACCEPT rule (add-only, idempotent, inserted at the top of
+        INPUT so it sits before any catch-all REJECT). Re-applied periodically in case rules were reloaded without
+        them. Does nothing if iptables is missing."""
+        def ipt(*args):
+            return subprocess.run(["iptables", "-w", "5", *args], capture_output=True, text=True, timeout=30)
+        added = False
         for port in ports:
-            if port in have:
-                continue
+            rule = ["INPUT", "-p", "tcp", "-m", "tcp", "--dport", str(port), "-j", "ACCEPT"]
             try:
-                subprocess.run(["ufw", "allow", f"{port}/tcp"], capture_output=True, timeout=30)
-                log.warning("opened ufw port %s", port)
+                if ipt("-C", *rule).returncode == 0:
+                    continue
+                if ipt("-I", *rule).returncode == 0:
+                    log.warning("opened iptables port %s", port)
+                    added = True
             except (OSError, subprocess.SubprocessError):
                 return
+        if added:
+            try:
+                if shutil.which("netfilter-persistent"):
+                    subprocess.run(["netfilter-persistent", "save"], capture_output=True, timeout=60)
+            except (OSError, subprocess.SubprocessError):
+                pass
 
     async def firewall_loop(self, ports) -> None:
         loop = asyncio.get_running_loop()
